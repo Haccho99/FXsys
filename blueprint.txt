@@ -1,0 +1,2450 @@
+本プロジェクト仕様書は、PythonとOANDA APIを連携したFX自動取引システムのシステム要件を定義します。
+
+------------------------------------------------------------------------------------
+# PythonとOANDA APIを連携したＦＸ自動取引システム構築プロジェクト Established by Volex & Co.
+
+## 1. 概要
+本システムは、トレンドフォロー＋モメンタム確認戦略およびボリンジャーバンド（BBands）スクイーズ戦略を基盤とし、Pythonがデータ分析、シグナル生成、取引実行、リスク管理、AI/Optunaによる最適化を担います。OANDA APIは価格データ取得、注文発注、ポジション管理を提供します。
+
+主要機能として、リアルタイムのWebインターフェイス（SPA）による総利益、ポジション、経済ニュース、AI/Optuna提案の監視、およびDiscordを介した通知と簡易操作による運用負荷軽減が含まれます。また、高インパクト指標に基づく取引停止、包括的なバックテスト、堅牢なリスク管理、AI/Optuna連携機能を統合し、高性能かつ高信頼性（低レイテンシ、高I/O効率）を実現します。対象通貨ペアはUSD/JPY、EUR/JPY、GBP/JPY、AUD/JPYで、15分足をデフォルトに運用します。最終成果物には、ソースコード、設定ファイル、ログ、可視化ファイル、ドキュメント、テスト結果が含まれます。
+
+## 2. 目的
+本プロジェクトの目的は、以下の目標を達成するFX自動取引システムの構築です：
+
+1.  **安定した収益の実現**:
+    *   トレンドフォロー＋モメンタム確認戦略およびBBandsスクイーズ戦略を採用し、プロフィットファクター1.65-1.70、勝率46-60%、シャープレシオ>1.0、最大ドローダウン<7-8%を目標とします。
+    *   Position Bookデータ、H1合成、動的スコアリング、LightGBMによるシグナルフィルタリング、およびTransactions Streamを活用し、収益性と勝率を向上させます。
+2.  **運用者の負担軽減**:
+    *   Webインターフェイスによるリアルタイム監視（総利益、ポジション、経済ニュース、AI/Optuna提案）と、Discordを介した通知（エントリー、エグジット、AIアドバイス、チャート画像）およびコマンド操作（!approve、!reject、!pause、!resume、!summary）により、運用負荷を10-20%削減します。
+    *   高インパクト指標に基づく取引停止通知を複数のチャネルで提供します。
+3.  **リスク管理の強化**:
+    *   ポジションサイズ、最大ポジション数、残高監視を徹底し、リスクを最小化します。
+    *   Transactions Streamによる約定イベント/SLヒット/拒否のリアルタイム検知、Pricing Streamによるスプレッド監視、およびAccount Exposureに基づく動的ロット管理により、損失を抑制し、安定運用を確保します。
+    *   高インパクト指標時の取引停止や、OANDA API通信エラー時のリトライ処理により、システム全体の堅牢性を高めます。
+4.  **AI/Optunaによる戦略最適化**:
+    *   市場環境、バックテスト結果、Position Bookデータに基づき、日次でパラメータ提案を生成し、シャープレシオ+0.05以上の改善を目指します。
+    *   LightGBM、LangChain RAG、ウォークフォワード分析を活用し、過学習を防止しつつ、最適な戦略パラメータを特定します。
+    *   Discordを通じて提案を通知し、運用者による承認/却下を可能にします。
+5.  **保守性と拡張性の確保**:
+    *   Numbaによる計算高速化、DuckDBによるデータI/O効率化、および重複ボラティリティ評価の一本化により、システムパフォーマンスを最適化します。
+    *   Discordログ集約とCI/CD（GitHub Actions、pytestカバレッジ80%）により、コード品質と保守性を維持します。
+    *   設定の外部化（config.json）とモジュール化された設計により、新通貨ペアやインジケーターの追加を迅速に実現します.
+
+## 3. システム構成
+本セクションでは、システムのアーキテクチャを定義します。Pythonが分析、シグナル生成、取引実行を管理し、OANDA APIでデータ提供と発注を実現。Webインターフェイスで運用情報を可視化し、Discordで通知と簡易指示を統合します。
+
+### 3.1 アーキテクチャ概要
+- **2層アーキテクチャ**：
+  - **Data Layer**：OANDA API（/pricing/stream、/transactions/stream、/positionBook、/accounts/{id}/summary）をRedisにキャッシュ（price_ticks、orderbook_{pair}、transactions）、DuckDBでTick/1分足をParquet保存（/data/ticks_{pair}.parquet、I/O削減70%）。
+  - **Logic Layer**：動的スコアリング（OrderBook/ADX/RSI/H1 EMA、閾値0.65-0.8）、LightGBMでシグナルフィルタリング（推論20µs）、ポジションサイズ計算、注文発注、通知。
+- **OANDA API**：
+  - 機能：価格データ提供（/v3/pricing、/pricing/stream）、発注（/v3/orders）、ポジション管理（/v3/positions）、Position Book（/positionBook）、Transactions Stream（/transactions/stream）、Account Summary & Exposure（/accounts/{id}/summary）、Pricing Streamのspread列。
+  - 実装：oandapyV20でREST API、aiohttpでストリーミング。
+- **通信**：
+  - REST API：HTTPS、JSON、Bearer認証（oandapyV20）。
+  - ストリーミング：/pricing/stream（250msティック）、/transactions/stream（約定イベント）をRedisにキャッシュ。
+  - エラーハンドリング：HTTP 429はリトライ3回（0.1秒間隔）、ストリーミング切断はPing-Ack 300ms未応答で再接続。
+  - ログ：oanda_stream_log.csv（timestamp, endpoint, status, latency_ms）。
+- **Webインターフェイス**：
+  - 実装：streamlit（ポート8501）、React SPA（フォールバック、http://localhost:5000）。
+  - 機能：シグナル履歴、勝率ヒートマップ、ポジション監視、ニュース翻訳、OrderBook/スコアリングヒートマップ、AI提案。
+  - セキュリティ：JWT、2段階認証、IPホワイトリスト（セクション6.3）。
+- **通知・制御**：
+  - Discord.pyでエントリー/エグジット/AIアドバイス/チャート画像（Plotly、<10MB）を#alertsに送信、ボットコマンド（!approve、!reject、!pause、!resume、!summary）で運用者指示を反映。
+  - WebhookでOANDA APIイベント（Transactions Stream、Position Book）を#alertsに送信。
+  - 補完通知：メール（SMTP）、Slack、LINE、Microsoft Teams。
+- **ストレージ**：
+  - Redis：キャッシュ（news_indicators、orderbook_{pair}、price_ticks）。
+  - Parquet：/data/candles_YYYYMMDD.parquet、/data/ticks_{pair}.parquet（DuckDB）。
+  - CSV：trade_log_YYYYMMDD.csv、orderbook_filter_log.csv、notification_log.csv。
+  - Google Drive：バックアップ（/backup/YYYYMMDD/）。
+
+### 3.1.1 システムアーキテクチャ図（テキストベース）
+```
+[運用者]
+    ↩↪ (Webブラウザ/Discordアプリ)
+[Web Interface: Streamlit/React SPA] ↔ [Discord: Bot/Webhook]
+    ↩↪ (REST API/WebSocket)          ↩↪ (Discord API/Webhook)
+[Backend: Flask/Streamlit]
+    ↩↪ (Python Modules)
+[Analysis & Execution Engine]
+├── data.py (価格取得、インジケーター、H1合成、Numba)
+├── signal.module.py (シグナル、スコアリング、LightGBM、#alerts通知)
+├── trade.py (発注、GSLO)
+├── risk.py (ポジションサイズ、Account Exposure、#alerts警告)
+├── monitor.py (ニュース/指標、スプレッド、Webhook)
+├── optimize.py (バックテスト、Optuna)
+├── ai_interface.py (AI/Optuna提案、#strategy通知)
+├── micro_alpha.py (Position Book処理)
+├── config.py (設定管理)
+├── dashboard.py (可視化)
+├── bot.py (Discord通知、コマンド)
+└── webhook.py (OANDAイベント通知)
+    ↩↪ (REST API/Streaming)
+[OANDA API]
+[External Services]
+├── investpy/newsapi (ニュース/指標)
+├── LangChain/Optuna/LightGBM (AI提案)
+├── SMTP/Slack/LINE/Teams/Discord (通知)
+└── Google Drive (バックアップ)
+```
+
+### 3.2 技術スタック
+- **言語**：Python 3.12、JavaScript（ES6）、HTML5/CSS3。
+- **ライブラリ**：
+  - データ処理：pandas, polars, pandas_ta, numpy, vectorbt, Numba (差分更新高速化), DuckDB (I/O削減).
+  - API連携：oandapyV20, aiohttp (WebSocket).
+  - Web：streamlit, flask, flask-socketio, react.
+  - ニュース：investpy, newsapi-python, deep_translator.
+  - 通知：smtplib, slack_sdk, linebot, pymsteams, Discord.py.
+  - 可視化：plotly, matplotlib.
+  - AI：langchain, optuna, LightGBM.
+  - セキュリティ：cryptography, jsonschema, pyotp.
+  - テスト：pytest.
+- **インフラ**：BeeksFX VPS（4コア、8GB RAM、256GB SSD）、100Mbps、遅延<50ms.
+
+### 3.3 モジュール構成
+- **data.py**：価格取得（/v3/candles, /pricing/stream）、インジケーター計算（M15×4でH1 EMA生成、Numba JIT）、DuckDBでParquet保存、マクロ特徴量（日米金利差等）の統合。
+- **signal.module.py**：トレードロジック（セクション4）、動的スコアリング（Position Book、ADX、RSI、H1 EMA）、LightGBMフィルタ、Discord #alerts通知。
+- **trade.py**：発注（/v3/orders）、ポジション更新、GSLO設定。
+- **risk.py**：ポジションサイズ、Account Exposure、残高監視、Discord #alerts警告、仮想ロット計算（AIスコアベース）。
+- **virtual_trade.py**：仮想取引シミュレーター（残高管理、仮想約定、ログ出力）。
+- **monitor.py**：ニュース・指標取得（investpy）、スプレッド監視（/pricing/stream）、Webhookで#alerts送信、LLMによるセンチメント分析。
+- **optimize.py**：バックテスト（vectorbt）、Optuna最適化。
+- **ai_interface.py**：AI提案生成（LightGBM、Optuna、LangChain RAG）、#strategy通知。
+- **micro_alpha.py**：Position Book処理、二段階フィルター。
+- **config.py**：設定管理（config.json）、バリデーション。
+- **virtual_main_loop.py**：仮想フォワードテスト用メインループ。リアルタイム価格による擬似運用。
+- **dashboard.py**：Webインターフェイスロジック、ヒートマップ生成。
+- **dashboard_server.py**：Flask API、WebSocket管理。
+- **bot.py**：Discordボット、通知（エントリー/エグジット/AIアドバイス/チャート）、コマンド（!approve/!reject/!pause/!resume）。
+- **webhook.py**：OANDA APIイベントをDiscord #alertsに送信。
+
+### 3.4 デプロイ構成
+- **環境**：BeeksFX VPS（推奨）、ローカル（Windows/Linux）。
+- **セットアップ**：
+  - Python：`pip install -r requirements.txt`.
+  - OANDA API：トークン設定（config.json）。
+  - Redis：`redis-server`.
+  - Flask：`python dashboard_server.py`.
+  - Discord：Botトークン設定（bot.py）。
+- **バックアップ**：GitHub（プライベートリポジトリ）、Google Drive（/backup/YYYYMMDD/）。
+
+### 3.5 非機能要件との整合性
+- **パフォーマンス**：データ処理<150ms（Numba、aiohttp）、バックテスト10分以内（DuckDB）、Discord通知<1秒。
+- **信頼性**：データ取得99.9%、発注95%、サーバー稼働率99.9%。
+- **保守性**：設定外部化（config.json）、テストカバレッジ80%（pytest）、Discordログ集約（#debug）。
+- **拡張性**：新通貨ペア1時間以内、AIプラットフォーム1週間以内。
+- **セキュリティ**：JWT、2段階認証、IPホワイトリスト、トークン暗号化。
+
+### 3.6 成果品との関連
+- **ソースコード**：/src/*.py, /static/*, /templates/*.
+- **設定**：config.json, error_mapping.json, glossary.json.
+- **ログ**：trade_log_YYYYMMDD.csv, orderbook_filter_log.csv, notification_log_YYYYMMDD.csv.
+- **可視化**：equity_curve.png, score_heatmap.png.
+- **ドキュメント**：user_guide.md, api_spec.md, troubleshooting.md.
+- **テスト**：performance_test.csv, unit_test_report.html.
+
+## 4. トレードロジック（トレンドフォロー＋モメンタム確認＋スクイーズ）
+本セクションでは、トレンドフォロー＋モメンタム確認戦略およびボリンジャーバンド（BBands）スクイーズ戦略のロジックを定義します。Pythonがインジケーター計算、シグナル生成、取引抑制を管理し、OANDA API（`/v3/pricing`, `/v3/candles`, `/pricing/stream`, `/positionBook`）でデータを取得、`/v3/orders`で発注します。動的スコアリング（Position Book、ADX、RSI、H1 EMA）、LightGBMフィルタリング（推論20µs）、H1合成（M15×4終値でI/O削減）、差分更新＋Numba（CPU負荷25%削減）、DuckDB（I/O削減70%）、Transactions Stream（約定検知<1ms、PF+0.05）を採用し、プロフィットファクター1.65-1.70、勝率46-60%、最大ドローダウン<7-8%を目標とします。Discord #alertsでエントリー/エグジット/チャート画像を通知し、運用負荷を10-20%軽減します。
+
+### 4.1 インジケーター
+以下のインジケーターを使用します。パラメータは`config.json`で設定可能（デフォルト値記載）。計算は`pandas_ta`または`polars`で実行、Numba JITで差分更新（CPU負荷25%削減）。H1 EMAはM15×4終値で合成生成し、I/Oリクエストを0.38/時間から0/時間に削減（I/O削減70%）、メモリ使用量20%削減。データは`/v3/candles`（M15、H1）、`/pricing/stream`（250msティック）から取得、`polars`でParquet保存（`/data/candles_YYYYMMDD.parquet`）、Redisキャッシュ（`price_ticks`, `h1_candles`）を使用。ログは`data_error_log.csv`（timestamp, pair, error）に記録、可視化はセクション6.1でチャート/ヒートマップ表示、バックテストはセクション8で`vectorbt`を使用。
+- **EMA（指数移動平均）**：
+  - 短期：5期間（`ema_short`）。
+  - 中期：20期間（`ema_mid`）。
+  - H1 EMA：H1足のEMA5およびEMA20（`ema_h1_short`, `ema_h1_mid`）。M15×4終値で合成生成（例：`h1_close = mean(m15_close[-4:])`）、I/Oリクエスト0/時間、メモリ20%削減。
+  - 用途：トレンド判定、H1でスコア補正（+0.2）。
+- **RSI（相対力指数）**：
+  - 期間：7（`rsi_period`）。
+  - 用途：モメンタム確認、エグジット、スコアリング。
+- **ADX（平均方向性指数）**：
+  - 期間：14（`adx_period`）。
+  - 閾値：25（トレンド、`adx_threshold`）、15（スクイーズ）。
+  - 用途：トレンド強度、スコアリング。
+- **ATR（平均真の値幅）**：
+  - 期間：14（`atr_period`）。
+  - 用途：TP/SL、トレーリングストップ、GSLO判定。
+- **ボリンジャーバンド（BBands）**：
+  - 期間：20（`bbands.period`）。
+  - 標準偏差：2（`bbands.std_dev`）。
+  - スクイーズ閾値：過去50期間の75%-95%（`squeeze_threshold_m15`）。
+  - 用途：ブレイクアウト検知。
+- **MACDヒストグラム**：
+  - 短期EMA：12（`macd_fast`）。
+  - 長期EMA：26（`macd_slow`）。
+  - シグナル線：9（`macd_signal`）。
+  - 閾値：0.001（`macd_histogram_threshold`）。
+  - 用途：スクイーズのブレイク方向判定。
+- **ボラティリティ評価**：
+  - 関数：`is_high_volatility()`でATR/ADX/スプレッドを統合（`0.5*(adx/50) + 0.5*(atr/atr_threshold) > 1.0`、CPU負荷10%削減）。
+- **計算**：
+  - H1 EMA合成：`data.py`で`polars`を使用し、M15終値4本を平均化（`h1_close = m15_close[-4:].mean()`）。Numba JITで差分更新。
+    ```python
+    import numba
+    import polars as pl
+    @numba.jit(nopython=True)
+    def synthesize_h1_ema(m15_close, span, prev_ema):
+        h1_close = m15_close[-4:].mean()
+        return (h1_close - prev_ema) * (2 / (span + 1)) + prev_ema
+    df = pl.read_parquet(f"/data/candles_{pair}_YYYYMMDD.parquet")
+    h1_ema = synthesize_h1_ema(df['close'].to_numpy(), config['ema_h1_short'], prev_ema)
+    ```
+  - キャッシュ：Redis（`h1_candles_{pair}`、TTL=3600秒）。
+  - ログ：`data_error_log.csv`（例：`2025-06-05 20:12, USDJPY, H1 synthesis failed, invalid M15 data`）。
+  - 可視化：セクション6.1でH1 EMAチャート（Plotly、5分更新）。
+  - バックテスト：セクション8でH1合成の精度（誤差<1%）とI/O削減効果（70%）を検証。
+
+### 4.2 トレンドフォロー＋モメンタム確認戦略
+#### 4.2.1 エントリー条件
+- **ロング**：
+  - 短期EMA（5）>中期EMA（20）（ゴールデンクロス）。
+  - RSI（7）>55（`rsi_long`）。
+  - ADX（14）>25（`adx_threshold`, `use_adx: true`の場合）。
+  - H1足でEMA5>EMA20ならスコア+0.2（`h1_ema_score`）。
+  - 動的スコア（Position Book、ADX、RSI、H1 EMA）>0.65（`score_threshold`）。
+  - LightGBMで`ml_score>0.5`（推論20µs）。
+  - `is_high_volatility()`がFalse（ATR/ADX/スプレッド統合評価、CPU負荷10%削減）。
+- **ショート**：
+  - 短期EMA（5）<中期EMA（20）（デッドクロス）。
+  - RSI（7）<45（`rsi_short`）。
+  - ADX（14）>25（`use_adx: true`の場合）。
+  - H1足でEMA5<EMA20ならスコア+0.2。
+  - 動的スコア>0.65、`ml_score>0.5`。
+  - `is_high_volatility()`がFalse（ATR/ADX/スプレッド統合評価、CPU負荷10%削減）。
+- **通知**：
+  - Discord #alertsに送信（例：「USDJPY Long, Score=0.75, Lot=100%」）。
+  - チャート画像（Plotly、エントリー位置付き、<10MB）を#alertsに送信。
+- **実装**：
+  - `signal.module.py`の`SignalGenerator`で判定。
+  - 例：
+    ```python
+    import numba
+    import numpy as np
+    @numba.jit(nopython=True)
+    def calculate_ema_diff(data, span, prev_ema):
+        return (data[-1] - prev_ema) * (2 / (span + 1)) + prev_ema
+    if ema_short > ema_mid and rsi > config['rsi_long'] and (not config['use_adx'] or adx > config['adx_threshold']):
+        score, lot_ratio = calculate_score(orderbook_imbalance, pos_imb, adx, rsi, h1_ema_condition)
+        features = np.array([[score, atr, adx, rsi, spread]])
+        ml_score = lgb_model.predict(features)[0]
+        if not is_high_volatility(atr, adx, spread) and score > config['score_threshold'] and ml_score > 0.5:
+            return {'pair': pair, 'signal': 'long', 'strategy': 'trend', 'score': score, 'lot_ratio': lot_ratio}
+    ```
+
+#### 4.2.2 エグジット条件
+- **ロング**：
+  - 短期EMA（5）<中期EMA（20）。
+  - RSI（7）<48（`rsi_exit_long`）。
+- **ショート**：
+  - 短期EMA（5）>中期EMA（20）。
+  - RSI（7）>52（`rsi_exit_short`）。
+- **通知**：
+  - Discord #alertsに送信（例：「USDJPY Exit, Profit=120pips」）。
+  - チャート画像（Plotly、エグジット位置付き、<10MB）を#alertsに送信。
+- **実装**：
+  - `signal.module.py`で監視、`polars.DataFrame`で状態管理。
+
+#### 4.2.3 ポジション管理
+- 同一方向の連続シグナルを抑制（`cooldown_period=1h`）。
+- スクイーズ戦略の同一方向シグナルは最大2ポジション許容。
+- 逆方向シグナルは両方許容。
+- **Position Book**：
+  - 乖離率：`pos_imb = long_volume/(long_volume + short_volume)`。
+  - センチメント反転：`delta = ob_imb - pos_imb`（PF+0.1、勝率+3%）。
+- **スコアリング**：
+  - 計算：`w1*orderbook_score + w2*adx_score + w3*rsi_score + w4*h1_ema_score`（`w1=w2=w3=0.3`, `w4=0.1`）。
+  - 閾値：0.55-0.65で半ロット（`lot_ratio=0.5`）、≥0.65でフルロット（`lot_ratio=1.0`）。
+- **実装**：
+  - `signal.module.py`、`micro_alpha.py`。
+
+### 4.3 BBandsスクイーズ戦略
+#### 4.3.1 エントリー条件
+- **基本条件**：
+  - BBands幅が過去50期間の75%-95%以下（`squeeze_threshold_m15`）。
+  - 価格が上限バンド上抜け（ロング）または下限バンド下抜け（ショート）。
+  - ATR（14）>8pips（`atr_threshold`）またはADX（14）>15。
+  - EMAクロス一致（EMA5>EMA20でロング、EMA5<EMA20でショート）、またはRSI（7）>40（ロング、`rsi_long_squeeze`）または<60（ショート、`rsi_short_squeeze`）。
+  - H1足でEMA5>EMA20（ロング）またはEMA5<EMA20（ショート）ならスコア+0.2。
+  - 動的スコア>0.65、LightGBM `ml_score>0.5`。
+  - `is_high_volatility()`がFalse。
+- **コンフルエンス**：
+  - **ロング**：
+    - MACDヒストグラム連続陽転（2バーで>0かつ増加、>`macd_histogram_threshold`）。
+    - 直近3バーに包み足なし（`use_engulfing_filter: true`）。
+    - 直前足が陽線。
+  - **ショート**：
+    - MACDヒストグラム連続陰転（2バーで<0かつ減少、<-`macd_histogram_threshold`）。
+    - 直近3バーに包み足なし。
+    - 直前足が陰線。
+  - **ノートレード**：MACDとプライスアクションが逆、または条件未達。
+- **優先ロジック**：
+  - スクイーズ後3バー以内かつADX<20ならスクイーズ優先。
+  - それ以外はトレンドフォロー優先。
+- **成功定義**：
+  - ブレイク後、価格がATR×1.0以上動く（成功率>0.7）。
+- **通知**：
+  - Discord #alertsに送信（例：「USDJPY Long, Squeeze, Score=0.70, Lot=50%」）。
+  - チャート画像（Plotly、<10MB）を#alertsに送信。
+- **実装**：
+  - `signal.module.py`の`SqueezeSignalGenerator`。
+- **フィルター**：
+  - Position Book：`imbalance` 0.55-0.65で半ロット、≥0.65でフルロット。
+
+#### 4.3.2 エグジット条件
+- **ロング**：
+  - RSI（7）<50（`rsi_exit_long_squeeze`）。
+  - RSI変化率<-5（`delta_rsi_threshold`）、1バー限定。
+- **ショート**：
+  - RSI（7）>50（`rsi_exit_short_squeeze`）。
+  - RSI変化率>5、1バー限定。
+- **通知**：
+  - Discord #alertsに送信（例：「USDJPY Exit, Squeeze, Profit=80pips」）。
+  - チャート画像（Plotly、<10MB）を#alertsに送信。
+- **実装**：
+  - `signal.module.py`で監視、`trade.py`で早期決済。
+
+#### 4.3.3 ポジション管理
+- 逆方向シグナルは許容。
+- トレンドフォローとの同一方向シグナルは最大2ポジション許容。
+- 状態管理：`polars.DataFrame`。
+
+### 4.4 エントリー抑制条件
+- **高スプレッド**：
+  - 過去1時間平均の3倍超（例：USD/JPY=3pips, EUR/JPY=4pips, `spread_threshold`）。
+  - `/pricing/stream`のspread列で250ms監視、Z-score>2で30分停止。
+  - 通知：Discord #alerts（例：「USDJPY Spread Alert, Z-score=2.5」）。
+  - スプレッド感知注文（`triggerCondition=MID`）。
+  - 実装：`data.py`で監視、`signal.module.py`で判定。
+- **経済指標**：
+  - 高インパクト指標（例：米NFP）の前30分～後60分除外（`economic_events.exclude_before/after`）。
+  - 実装：`investpy`、`monitor.py`。
+- **要人発言**：
+  - スケジュール発言：前後15分除外。
+  - 突発発言：スプレッド3倍超で30分停止、#alertsに通知。
+  - 実装：`newsapi-python`、`monitor.py`。
+- **ボラティリティ**：
+  - `is_high_volatility()`でATR/ADX/スプレッド判定（ATR5分が1時間平均の2倍超またはスプレッド3倍超）。
+  - ATR3倍超でポジションクローズ、#alertsに通知。
+  - 実装：`data.py`、`signal.module.py`。
+- **残高不足**：
+  - 100万円または初期50%以下で新規エントリー禁止、SLをATR×1.0に縮小。
+  - 実装：`monitor.py`、`signal.module.py`。
+
+### 4.5 Position Bookフィルタ
+- **目的**：
+  - フェイクブレイク排除（ダマシ15%削減）。
+  - スクイーズエントリー精度向上（勝率+3%）。
+  - プロフィットファクター+0.1。
+- **データ**：
+  - `/v3/instruments/{inst}/positionBook`（5分間隔）。
+- **処理**：
+  - 乖離率：`pos_imb = long_volume/(long_volume + short_volume)`。
+  - 範囲：価格±50pips。
+  - 閾値：0.55-0.65で半ロット（USD/JPY=0.65, GBP/JPY=0.70）。
+- **統合**：
+  - スクイーズ：ロングは`pos_imb` 0.55-0.65で半ロット、≥0.65でフルロット、ショートは0.45-0.35で半ロット、≤0.35でフルロット。
+  - トレンド：オプション（`use_position_book_trend: false`）。
+  - 不一致（OrderBookとPosition Bookが逆）は抑制。
+- **スコアリング**：
+  - `delta = ob_imb - pos_imb`でセンチメント反転判定。
+  - スコア：`w1*orderbook_score + w2*adx_score + w3*rsi_score + w4*h1_ema_score`（`w1=w2=w3=0.3`, `w4=0.1`）。
+  - 閾値：>0.65。
+- **実装**：
+  - `micro_alpha.py`で乖離計算、`signal.module.py`で適用。
+- **ログ**：
+  - `orderbook_filter_log.csv`（timestamp, pair, imbalance, score, lot_ratio）。
+- **可視化**：
+  - Position Bookヒートマップ（plotly、5分更新、セクション6.1）。
+- **バックテスト**：
+  - 勝率+3%、ダマシ15%削減、PF+0.1。
+
+### 4.6 RSI＋BBands統合閾値制御
+- **目的**：
+  - 低勝率ゾーン排除、過学習防止。
+- **条件**：
+  - RSI > `dynamic_rsi_threshold_[pair]`（例：USD/JPY=58）。
+  - BBands幅 < `dynamic_bb_width_[pair]`（例：USD/JPY=0.08）。
+- **動的閾値**：
+  - 4週間蓄積データ（`trade_data_YYYYMMDD.csv`）。
+  - トレード数<10はペアを除外。
+- **緩和ロジック**：
+  - シグナル<2件/日でBBWidthを+0.01（最大+0.05、成功率>0.5）。
+  - 勝率<0.35でロット30%縮小（`lot_adjusted`）。
+- **実装**：
+  - `data.py`：BB算法、分布解析。
+  - `signal.module.py`：
+    ```python
+    if rsi > config['dynamic_rsi_threshold'][pair] and bb_width < config['dynamic_bb_width'][pair]:
+        return allow_entry()
+    ```
+  - `ai_optimizer.py`：ヒートマップ生成、緩和ロジック。
+- **ログ**：
+  - `trade_attempts_YYYYMMDD.csv`（rsi, bb_width, excluded_zone, lot_adjusted）。
+
+### 4.7 フィルター切替ロジック
+- **目的**：
+  - 勝率<0.4時に安定化。
+- **条件**：
+  - 3日平均`win_rate<0.4`かつ`sharpe_ratio<0.8`で`use_adx`をトグル。
+  - ADXの+DI/-DI差<`di_diffThreshold_[pair]`（USD/JPY=10, EUR/JPY=12）でスキップ。
+- **クールダウン**：
+  - 切替後5日間禁止。
+- **実装**：
+  - `data.py`：ADX/DI計算。
+  - `signal.module.py`：
+    ```python
+    if config['use_adx'][pair] and abs(di_plus - di_minus) < config['di_diffThreshold'][pair]:
+        return skip_trade('di_diff_threshold')
+    ```
+  - `ai_optimizer.py`：切替評価。
+- **ログ**：
+  - `trade_attempts_YYYYMMDD.csv`（filter_changed, skip_reason）。
+
+### 4.8 バックテストと検証
+- **ライブラリ**：
+  - `vectorbt`, Numba, DuckDB。
+- **データ**：
+  - `/v3/candles`（6か月、M15、H1）。
+  - Position Book（`/v3/instruments/{pair}/positionBook`, 5分間隔）。
+  - 動的スプレッド：過去1時間平均±5%。
+- **検証指標**：
+  - 勝率：46-60%。
+  - シャープレシオ：>1.0。
+  - 最大ドローダウン：<7-8%。
+  - プロフィットファクター：1.65-1.70。
+  - RR比：>1.5。
+  - シグナル頻度：4-9/日。
+  - スクイーズ成功率：>0.7。
+  - Position Book効果：勝率+3%、ダマシ15%削減。
+  - LightGBM効果：勝率+5%、PF+0.05。
+  - H1 EMA合成効果：I/O削減70%, トレンド一致率+10%。
+- **追加検証**：
+  - スコアリング閾値：0.65で最適化（勝率+3%）。
+  - MACD閾値：0.001-0.3。
+  - 包み足フィルター：有効/無効。
+- **最適化**：
+  - Optunaで50試行、シャープレシオ最大化。
+- **出力**：
+  - CSV：`backtest_YYYYMMDD.csv`（timestamp, pair, signal, score, profit）。
+  - PNG：`equity_curve.png`, `score_log.png`.
+  - Discord：#statsに要約送信（例：「USDJPY Backtest: WinRate=48%, PF=1.72」）。
+- **過学習防止**：
+  - ウォークフォワード分析（4ヶ月インサンプル、1ヶ月アウトサンプル）。
+
+### 4.9 実装例（signal.module.py）
+```python
+import polars as pl
+import numba
+import numpy as np
+import lightgbm as lgb
+import discord
+from discord.ext import commands
+from datetime import datetime
+import plotly.express as px
+
+@numba.jit(nopython=True)
+def calculate_ema_diff(data, span, prev_ema):
+    return (data[-1] - prev_ema) * (2 / (span + 1)) + prev_ema
+
+class SignalGenerator:
+    def __init__(self, config, discord_bot):
+        self.config = config
+        self.orderbook_processor = OrderBookProcessor(config)
+        self.lgb_model = lgb.Booster(model_file=config['lgb_model_path'])
+        self.bot = discord_bot
+
+    def is_high_volatility(self, atr, adx, spread):
+        return 0.5 * (adx / 50) + 0.5 * (atr / self.config['atr_threshold']) > 1.0
+
+    def calculate_score(self, orderbook_imbalance, pos_imb, adx, rsi, h1_ema_condition):
+        delta = orderbook_imbalance - pos_imb
+        score = 0.3 * np.clip(delta * 2, -0.2, 0.2) + 0.3 * (adx / 50) + 0.3 * (rsi / 100) + 0.1 * (0.2 if h1_ema_condition else 0)
+        lot_ratio = 0.5 if 0.55 <= orderbook_imbalance < 0.65 else 1.0
+        return score, lot_ratio
+
+    async def generate_signal(self, pair, data):
+        atr = data['atr'][-1]
+        adx = data['adx'][-1]
+        rsi = data['rsi'][-1]
+        spread = data['spread'][-1]
+        ema_short = calculate_ema_diff(data['close'], self.config['ema_short'], data['ema_short'][-2])
+        ema_mid = calculate_ema_diff(data['close'], self.config['ema_mid'], data['ema_mid'][-2])
+        h1_ema_condition = data['h1_ema_short'][-1] > data['h1_ema_mid'][-1]
+        orderbook_filter = self.orderbook_processor.check_filter(pair)
+        pos_imb = self.orderbook_processor.get_position_book_imbalance(pair)
+        score, lot_ratio = self.calculate_score(orderbook_filter['imbalance'], pos_imb, adx, rsi, h1_ema_condition)
+        features = np.array([[score, atr, adx, rsi, spread]])
+        ml_score = self.lgb_model.predict(features)[0]
+        if not self.is_high_volatility(atr, adx, spread) and score > self.config['score_threshold'] and ml_score > 0.5:
+            signals = [{'pair': pair, 'signal': 'long', 'strategy': 'trend', 'score': score, 'lot_ratio': lot_ratio}]
+            channel = self.bot.get_channel(self.config['discord_alerts_channel'])
+            await channel.send(f"Signal Generated: {pair}, {signals[0]['signal']}, Score={score:.2f}, Lot={lot_ratio*100}%")
+            df = pl.DataFrame({'price': data['close'][-5:], 'time': data['timestamp'][-5:]})
+            fig = px.line(df, x='time', y='price', title=f'{pair} Entry')
+            fig.write_image(f'chart_{pair}.png')
+            with open(f'chart_{pair}.png', 'rb') as f:
+                await channel.send(file=discord.File(f))
+            with open("orderbook_filter_log.csv", "a") as f:
+                f.write(f"{datetime.now()},{pair},{orderbook_filter['imbalance']:.5f},{score:.3f},{lot_ratio}\n")
+            return signals
+        return []
+```
+
+## 5. TP/SL・トレーリングストップ
+本セクションでは、テイクプロフィット（TP）、ストップロス（SL）、トレーリングストップ、GSLO、部分決済の仕様を定義します。Pythonが動的計算を行い、OANDA API（`/v3/orders`, `/v3/positions`, `/transactions/stream`）で管理します。Discord #alertsで約定やリスク通知を送信し、最大ドローダウン<7-8%、RR比>1.5を目標とします。
+
+### 5.1 ストップロス（SL）
+- **設定**：
+  - ATR（14）×1.5-2.5（`sl_mult`, デフォルト：2.0）。
+  - 例：USD/JPY、ATR=10pipsならSL=20pips。
+- **動的調整**：
+  - 高ボラティリティ（ATRが1時間平均の2倍超）：`sl_mult=1.5`。
+  - 低ボラティリティ（0.5倍以下）：`sl_mult=2.5`。
+- **実装**：
+  - `signal.module.py`でATR計算、`trade.py`で`/v3/orders`設定。
+  - 例：
+    ```python
+    sl_mult = 1.5 if atr > 2 * atr_mean else 2.5 if atr < 0.5 * atr_mean else 2.0
+    sl_price = entry_price - atr * sl_mult if signal['signal'] == 'long' else entry_price + atr * sl_mult
+    ```
+- **通知**：
+  - SLヒットをDiscord #alertsに送信（例：「USDJPY SL Hit, Loss=-20pips」）。
+- **バックテスト**：
+  - 損失抑制効果（最大ドローダウン<7-8%）。
+- **ログ**：
+  - `order_log_YYYYMMDD.csv`（timestamp, pair, sl_price, atr, sl_mult）。
+
+### 5.2 テイクプロフィット（TP）
+- **設定**：
+  - SL×1.5-2.0（`tp_mult`, デフォルト：1.5）。
+  - 例：SL=20pipsならTP=30pips。
+- **動的調整**：
+  - トレンド相場（ADX>25）：`tp_mult=1.8`。
+  - レンジ相場（ADX<20）：`tp_mult=1.2`。
+- **実装**：
+  - `signal.module.py`で計算、`trade.py`で`/v3/orders`設定。
+  - 例：
+    ```python
+    tp_mult = 1.8 if adx > 25 else 1.2 if adx < 20 else 1.5
+    tp_price = entry_price + sl_distance * tp_mult if signal['signal'] == 'long' else entry_price - sl_distance * tp_mult
+    ```
+- **通知**：
+  - TPヒットをDiscord #alertsに送信（例：「USDJPY TP Hit, Profit=30pips」）。
+- **バックテスト**：
+  - RR比>1.5。
+- **ログ**：
+  - `order_log_YYYYMMDD.csv`（tp_price, tp_mult）。
+
+### 5.3 トレーリングストップ
+- **設定**：
+  - ATR×1.0-1.5（`trail_mult`, デフォルト：1.2）。
+  - 例：ATR=10pipsならトレール幅=12pips。
+- **条件**：
+  - ATR≤15pips（`gslo_atr_threshold`）。
+  - 利益がTPの50%に達したら有効化。
+  - 価格がトレール幅以上逆行で終了。
+- **実装**：
+  - `trade.py`で`/v3/trades/{tradeID}/orders`更新。
+  - 例：
+    ```python
+    if atr <= config['gslo_atr_threshold'] and profit >= tp_price * 0.5:
+        trail_price = max(current_price - atr * trail_mult, trail_price) if signal['signal'] == 'long' else min(current_price + atr * trail_mult, trail_price)
+    ```
+- **通知**：
+  - トレール終了を#alertsに送信（例：「USDJPY Trailing Stop Hit, Profit=25pips」）。
+- **バックテスト**：
+  - 利益確保率+10%。
+- **ログ**：
+  - `order_log_YYYYMMDD.csv`（trail_price, trail_mult）。
+
+### 5.4 保証付きストップロス（GSLO）
+- **設定**：
+  - ATR>15pips（`gslo_atr_threshold`）。
+  - SLと同一価格。
+- **実装**：
+  - `trade.py`で`guaranteedStopLossOnFill`設定。
+  - 例：
+    ```python
+    if atr > config['gslo_atr_threshold']:
+        order_data['order']['guaranteedStopLossOnFill'] = {"price": str(sl_price)}
+    ```
+- **通知**：
+  - GSLO適用を#alertsに送信（例：「USDJPY GSLO Applied, Price=135.123」）。
+- **バックテスト**：
+  - 損失トレード削減率+5%。
+- **ログ**：
+  - `order_log_YYYYMMDD.csv`（gslo_price）。
+
+### 5.5 部分決済
+- **設定**：
+  - 利益がTPの50%でポジションの50%決済。
+  - 例：TP=30pipsで+15pipsなら50%決済。
+- **実装**：
+  - `trade.py`で`/v3/trades/{trade_id}/close`。
+  - 例：
+    ```python
+    if profit >= tp_price * 0.5:
+        units_to_close = int(units * 0.5)
+        close_data = {"units": str(units_to_close)}
+    ```
+- **通知**：
+  - 部分決済を#alertsに送信（例：「USDJPY Partial Close, Profit=15pips」）。
+- **ログ**：
+  - `order_log_YYYYMMDD.csv`（partial_close_units, profit）。
+- **バックテスト**：
+  - シャープレシオ+0.2。
+
+### 5.6 実装例（trade.py）
+```python
+import oandapyV20
+from oandapyV20.endpoints.orders import OrderCreate
+import uuid
+import json
+from datetime import datetime
+
+class TradeExecutor:
+    def __init__(self, config):
+        self.client = oandapyV20.API(access_token=config['oanda_api_token'], environment="practice")
+        self.account_id = config['account_id']
+        self.config = config
+
+    def place_order(self, pair, signal, units, sl_price, tp_price, atr):
+        client_id = str(uuid.uuid4())
+        data = {
+            "order": {
+                "type": "MARKET",
+                "instrument": pair.replace('/', '_'),
+                "units": str(int(units * signal['lot_ratio'])),
+                "stopLossOnFill": {"price": str(sl_price)},
+                "takeProfitOnFill": {"price": str(tp_price)},
+                "clientExtensions": {"id": client_id, "tag": "EA_V3"},
+                "triggerCondition": "MID"
+            }
+        }
+        if atr > self.config['gslo_atr_threshold']:
+            data['order']['guaranteedStopLossOnFill'] = {"price": str(sl_price)}
+        r = OrderCreate(accountID=self.account_id, data=data)
+        response = self.client.request(r)
+        trade_id = response['orderFillTransaction']['tradeOpened']['tradeID']
+        channel = self.bot.get_channel(self.config['discord_alerts_channel'])
+        asyncio.run(channel.send(f"Order Placed: {pair}, TradeID={trade_id}, Units={units}, SL={sl_price}, TP={tp_price}"))
+        with open(f"order_log_{datetime.now().strftime('%Y%m%d')}.csv", "a") as f:
+            f.write(f"{datetime.now()},{pair},{trade_id},{sl_price},{tp_price},{atr > self.config['gslo_atr_threshold']}}\n")
+        return trade_id
+```
+
+#### 備考（Transactions Stream）
+セクション5.6（`trade.py`）では、OANDA APIの`/v3/orders`エンドポイントを使用した注文処理が実装されており、約定確認は以下のコード例で`response['orderFillTransaction']['tradeOpened']['tradeID']`を介して取得されています：
+
+```python
+def place_order(self, pair, signal, units, sl_price, tp_price, atr):
+    client_id = str(uuid.uuid4())
+    data = {
+        "order": {
+            "type": "MARKET",
+            "instrument": pair.replace('/', '_'),
+            "units": str(int(units * signal['lot_ratio'])),
+            "stopLossOnFill": {"price": str(sl_price)},
+            "takeProfitOnFill": {"price": str(tp_price)},
+            "clientExtensions": {"id": client_id, "tag": "EA_V3"},
+            "triggerCondition": "MID"
+        }
+    }
+    r = OrderCreate(accountID=self.account_id, data=data)
+    response = self.client.request(r)
+    trade_id = response['orderFillTransaction']['tradeOpened']['tradeID']
+    channel = self.bot.get_channel(self.config['discord_alerts_channel'])
+    asyncio.run(channel.send(f"Order Placed: {pair}, TradeID={trade_id}, Units={units}, SL={sl_price}, TP={tp_price}"))
+    with open(f"order_log_{datetime.now().strftime('%Y%m%d')}.csv", "a") as f:
+        f.write(f"{datetime.now()},{pair},{trade_id},{sl_price},{tp_price},{atr > self.config['gslo_atr_threshold']}}\n")
+    return trade_id
+```
+
+この実装は、注文の約定を即座に確認するものの、`/transactions/stream`を用いた<1msのリアルタイム約定検知には対応していません。`/transactions/stream`の機能（約定検知、スリッページ削減、PF+0.05）は、直接的な実装例が記載されておらず、セクション7.4（通知：約定通知）および9.4（エラーハンドリング：約定拒否検知）で詳細に実装されている可能性があります。想定される実装は以下の通りです：
+- `monitor.py`で`/transactions/stream`を`aiohttp`のWebSocketで監視。
+- 約定イベント（例：`MARKET_ORDER_TRADE_OPEN`）をキャプチャし、Fill Latencyを計測（`latency = timestamp_received - timestamp_order`）。
+- ログ：`transaction_log_YYYYMMDD.csv`（例：`2025-06-05 20:12,12345,0.8ms,completed`）。
+- Discord #alertsに通知（例：「USDJPY TradeID=12345, Fill Latency=0.8ms, Status=Completed」）。
+
+仮想的実装例（`monitor.py`）：
+```python
+import aiohttp
+import asyncio
+import json
+from datetime import datetime
+
+class TransactionMonitor:
+    def __init__(self, config, bot):
+        self.config = config
+        self.bot = bot
+        self.stream_url = f"{config['oanda_stream_url']}/v3/accounts/{config['account_id']}/transactions/stream"
+
+    async def monitor_transactions(self):
+        async with aiohttp.ClientSession() as session:
+            async with session.ws_connect(self.stream_url) as ws:
+                async for msg in ws:
+                    if msg.type == aiohttp.WSMsgType.TEXT:
+                        data = json.loads(msg.data)
+                        if data['type'] == 'MARKET_ORDER_TRADE_OPEN':
+                            latency = (datetime.now() - datetime.fromisoformat(data['time'].replace('Z', ''))).total_seconds() * 1000
+                            channel = self.bot.get_channel(self.config['discord_alerts_channel'])
+                            await channel.send(f"TradeID={data['tradeID']}, Fill Latency={latency:.2f}ms, Status={data['status']}")
+                            with open(f"transaction_log_{datetime.now().strftime('%Y%m%d')}.csv", "a") as f:
+                                f.write(f"{datetime.now()},{data['tradeID']},{latency:.2f},{data['status']}\n")
+```
+
+`/pricing/stream`（セクション4.4）や`/v3/positions`（セクション5）のようなストリーム処理が実装されており、`/transactions/stream`も同様のアーキテクチャ（`aiohttp`、Redisキャッシュ）で拡張可能です。ただし、完全な実装と検証（例：スリッページ削減効果、PF+0.05）は、セクション7.4（通知実装）および9.4（エラーハンドリング）で補完される必要があります。ユーザーがセクション7-9の再生成を依頼した場合、具体的な`monitor.py`の実装とログ形式（`transaction_log_YYYYMMDD.csv`）を提供できます。
+
+
+## 6. インターフェイス
+
+本セクションでは、運用者向けのWebインターフェイスおよびDiscordインタラクションを定義します。シングルページアプリケーション（SPA、http://localhost:8501）をStreamlit（フォールバック：Flask＋React、http://localhost:5000）で提供し、リアルタイムの運用情報、設定変更、ログ閲覧、セキュリティ機能を統合します。表示内容には、実績（総利益、ペア別損益、エクイティカーブ）、AI/Optunaとのやり取り（提案履歴、却下理由、バックテスト結果）、ポジション情報（TP/SL、GSLO、シグナル候補）、経済ニュース・指標（日本語翻訳、24時間以内のイベント）、パラメータ設定（`config.json`の編集）が含まれます。Discordでエントリー/エグジット/AIアドバイス/チャート画像の通知、簡易指示（!approve/!reject/!pause/!resume）を提供し、運用負荷を10-20%軽減します。Pythonがエントリー・エグジットロジックを一括管理し、OANDA API（`/v3/pricing`, `/v3/candles`, `/v3/orders`, `/v3/positions`, `/transactions/stream`）でデータ取得・発注を行います。セキュリティ（JWT認証、2段階認証、IPホワイトリスト）、リアルタイム更新（WebSocketで5秒ごと）、用語解説を組み込み、バックテスト結果の可視化（`vectorbt`）やログ管理（`RotatingFileHandler`）を強化します。USD/JPY、EUR/JPY、GBP/JPY、AUD/JPYのデータをペア別に表示し、レイテンシ<150ms、I/O削減70%を目標とします。
+- **可視化**：
+  - Streamlit（ポート8501）でシグナル履歴、勝率ヒートマップ（`hourly_pnl_heatmap.png`）、Position Bookヒートマップ（`orderbook_heatmap.png`）。
+  - フォールバック：Flask＋React（`http://localhost:5000`）。
+- **通知**：
+  - Pythonで一元管理（`discord.py`, `slack_sdk`, `pymsteams`, `linebot`, `smtplib`）。
+  - 例：`send_discord_message("USDJPY Long Executed, Score=0.75")`。
+
+### 6.1 機能概要
+ダッシュボードは以下の情報を提供します：
+- **実績**：
+  - 総利益（例：¥1,000,000）、ペア別損益（USD/JPY：+50pips、EUR/JPY：+30pips）、日次/週次/月次推移。
+  - グラフ：エクイティカーブ（`plotly`, `equity_curve.png`）、時間帯別損益ヒートマップ（`hourly_pnl_heatmap.png`）。
+- **AI/Optunaとのやり取り**：
+  - 提案履歴（`ai_proposals.csv`）：提案ID、内容（例：`rsi_long=58`）、適用状況（適用/却下/保留）、バックテスト結果（シャープレシオ、PF）、却下理由（例：「高ボラで不安定」）。
+  - 過去1年間の収益上位5提案（例：`squeeze_threshold_m15=0.9`, ¥250,000, 2025-04-15）。
+  - プロンプト/応答ログ（`ai_log_YYYYMMDD.csv`）。
+- **ポジション情報**：
+  - 保有ポジション：通貨ペア、方向、エントリー価格、TP、SL、GSLO、ATR、含み損益、ステータス（5秒更新、`/v3/positions`）。
+  - 例：`USDJPY Long, Entry: 150.00, TP: 150.45, SL: 149.70, GSLO: Enabled, ATR: 10pips, Unrealized: +20pips`。
+- **シグナル候補**：
+  - 未約定の予測エントリー：通貨ペア、方向、価格、条件、スコア（例：`EURJPY Long, 165.50, RSI>55, BBWidth<0.08, Score=0.65`）。
+  - 条件：トレンド強度（ADX>25）またはスクイーズブレイク後3バー以内、LightGBM `ml_score>0.5`。
+- **経済ニュース・指標**：
+  - 24時間以内のイベントを時系列表示（日本語翻訳、`deep_translator`）。
+  - データ項目：時間（24時間形式）、イベント名、関係通貨、説明、重要度。
+  - 例：`2025-06-05 21:30 | 米NFP | USD | 高インパクト雇用統計 | 高`。
+  - 高/中重要度は薄ピンク色で強調（取引停止対象、`monitor.py`）。
+- **設定変更**：
+  - 通貨ペア（USD/JPY、EUR/JPY、GBP/JPY、AUD/JPY）、時間足（M15、H1）、インジケーター閾値、通知チャネル（Discord、メール、Slack、LINE、Teams）。
+- **パラメータ設定**：
+  - `config.json`の閾値・パラメータを一覧表示、編集、保存（セクション6.7）。
+- **セキュリティ**：
+  - JWT認証（`flask-jwt-extended`）、2段階認証（TOTP, `pyotp`）、IPホワイトリスト（`config.allowed_ips`）、セッションタイムアウト（30分）。
+  - 操作ログ（`user_action_log.csv`）、セキュリティログ（`security_log.csv`）。
+- **用語解説**：
+  - トレンドフォロー、スクイーズ、Position Book、動的スコアリングなどの説明（`glossary.json`）。
+  - 例：`rsi_long`→「RSIがこの値を上回ると買いシグナルの条件を満たす」。
+
+### 6.2 UIモックアップ（テキストベース）
+```
+[Header: FX EA Dashboard - Volex & Co.]
+  - ユーザー: [username] | 最終同期: 2025-06-05 20:12 JST | ログアウト
+[Navbar: 実績 | ポジション | AI/Optuna | ニュース/指標 | 設定 | パラメータ | 用語解説]
+[実績タブ]
+  - エクイティカーブ (Plotly折れ線グラフ: 日次/週次/月次切替)
+  - 損益テーブル: 通貨ペア | 総利益 | 勝率 | 取引数
+    | USDJPY | ¥50,000 | 48% | 120 |
+    | EURJPY | ¥30,000 | 43% | 100 |
+    | GBPJPY | ¥150,000 | 50% | 80  |
+    | AUDJPY | ¥120,000 | 40% | 50  |
+  - 時間帯別損益図（Plotly Heatmap: 時間×通貨ペア, `hourly_pnl_heatmap.png`）
+[ポジションタブ]
+  - ポジションテーブル: 通貨ペア | 方向 | エントリー価格 | TP | SL | GSLO | ATR | 損益 | ステータス
+    | USDJPY | Long  | 150.00 | 150.45 | 149.70 | Enabled | 10pips | +20pips | 保有中 |
+    | GBPJPY | Short | 15.00 | 14.50 | -0.40 | Disabled | 12pips | -10pips | 保有中 |
+  - シグナル候補：
+    | 通貨ペア | 方向 | 予測価格 | USDJPY | Long  | 150.60 | RSI>55, Score=0.65 |
+| EURJPY | Short | 165.10 | BBWidth<0.0, Score=8 | 0.67 |
+[AI/Optunaタブ]
+  - 提案履歴テーブル：
+    | PID | TS | 提案内容 |            | 適用状況 | バックテスト | 却下理由 |
+    | 001  | 2025-06-05 | 14:30 | rsi_long=58 | USDJPY | Applied | Sharpe+0.05 | - |
+    | 002 | 2025-05-15 | squeeze_threshold=0.9 | EURJPY | Rejected | - | High Volatility |
+  - 収益上位5提案：
+    | 提案内容 |                    | 利益 | 日付 |
+    | squeeze_threshold_m15=0.9 | | ¥250,000 | 2025-04-15 |
+    | rsi_long=60 |               | ¥200,000 | 2025-03-10 |
+[ニュース/指標タブ]
+  - イベントテーブル：時間 | イベント名 | 通貨 | 説明 | 重要度
+    | 2025-06-05 21:30 | 米NFP | USD | 高インパクト雇用統計 | 高 (薄ピンク) |
+    | 2025-06-05 15:00 | 豪CPI | AUD | 中インパクト消費者物価 | 中 (薄ピンク) |
+[設定タブ]
+  - フォーム：通貨ペア選択 | 時間足 | 通知チャネル (Discord/メール/Slack/LINE/Teams)
+  - セキュリティ：JWTログイン | 2段階認証 (TOTP QRコード) | IPホワイトリスト
+[パラメータタブ]
+  - テーブル：パラメータ | 現在の値 | 新しい値
+    | USDJPY.rsi_long | 55 | [60] |
+    | EURJPY.squeeze_threshold_m15 | 0.85 | [0.9] |
+    | notification_discord_enabled | True | [Toggle] |
+  - ボタン：[設定] (config.jsonを更新)
+[用語解説タブ]
+  - テーブル：用語 | 説明
+    | RSI買い | RSIがこの値を上回ると買いシグナルの条件を満たす... |
+    | Position Book | 市場参加者のロング/ショート比率を示す... |
+[Footer: システムステータス: 正常 | CPU: 25% | メモリ: 30% | ログ閲覧 | セキュリティログ]
+```
+
+### 6.3 実装詳細
+- **フレームワーク**：
+  - **フロントエンド**：React（CDN: `https://cdn.jsdelivr.net/npm/react`）、Tailwind CSS。
+  - **バックエンド**：Flask（`flask`, `flask-socketio`）、Streamlit（`streamlit`）。
+  - **データストア**：Redis（キャッシュ、`redis`）、DuckDB（ログ、`/data/logs_YYYYMMDD.parquet`）。
+- **データ更新**：
+  - リアルタイム：WebSocket（`flask-socketio`）で価格（`/v3/pricing/stream`）、ポジション（`/v3/positions`）、AI提案を5秒更新。
+  - 定期更新：ヒートマップ（`orderbook_heatmap.png`）、バックテスト結果を5分更新。
+  - 経済ニュース・指標：発表から24時間経過または終了後削除（`monitor.py`）。
+- **セキュリティ**：
+  - JWT認証（`flask-jwt-extended`）：ログイン時にトークン発行、有効期限30分。
+  - 2段階認証：TOTP（`pyotp`、QRコード表示）。
+  - IPホワイトリスト：`config.json`（`allowed_ips: ["192.168.1.0/24"]`）。
+  - セッションタイムアウト：30分。
+  - データ保護：APIトークン暗号化（AES-256, `cryptography`）。
+  - 操作ログ：`user_action_log.csv`（`timestamp, user_id, action, status`）。
+  - セキュリティログ：`security_log.csv`（`timestamp, user_id, action=login|logout|failed, ip_address, status`）。
+- **翻訳**：
+  - 経済ニュース（`newsapi-python`）、指標（`investpy`）を`deep_translator`で日本語翻訳。
+  - 例：`US Non-Farm Payrolls`→`米雇用統計`。
+- **ログ連携**：
+  - トレードログ（`trade_log_YYYYMMDD.csv`）、AI提案（`ai_proposals.csv`）、通知ログ（`notification_log_YYYYMMDD.csv`）、セキュリティログ（`security_log.csv`）。
+  - フィルター：日付、通貨ペア、ステータス。
+  - 管理：`RotatingFileHandler`で10MB上限、30日保持。
+  - Discord #debugで要約（例：「USDJPY Trades=5, AvgScore=0.68」）。
+- **バックテスト可視化**：
+  - エクイティカーブ（`equity_curve.png`）、時間帯別損益（`hourly_pnl_heatmap.png`）、Position Book分布（`orderbook_heatmap.png`）。
+  - データ：`backtest_YYYYMMDD.csv`（勝率、シャープレシオ、PF）。
+  - ライブラリ：`vectorbt`, `plotly`。
+- **通知**：
+  - チャネル：Discord（#alerts）、メール（`smtplib`）、Slack（`slack_sdk`）、LINE（`linebot`）、Teams（`pymsteams`）。
+  - 内容：エントリー/エグジット（例：「USDJPY Long, Score=0.75」）、AIアドバイス（例：「Proposal ID:001, rsi_long=58」）、スプレッド警告（例：「USDJPY Spread: 5.2pips」）、チャート画像（Plotly、<10MB）。
+  - 実装：`bot.py`, `webhook.py`。
+- **サーバー**：
+  - Streamlit（ポート8501、優先）、Flask＋React（ポート5000、フォールバック）。
+  - インフラ：BeeksFX VPS（4コア、8GB RAM、256GB SSD、遅延<50ms）。
+- **実装例**（`dashboard.py`）：
+  ```python
+  import streamlit as st
+  import plotly.express as px
+  import polars as pl
+  import redis
+  from datetime import datetime
+
+  redis_client = redis.Redis(host='localhost', port=6379)
+
+  def render_dashboard():
+      st.title("FX Automated Trading Dashboard")
+      st.subheader("実績")
+      df = pl.read_csv(f"trade_log_{datetime.now().strftime('%Y%m%d')}.csv")
+      fig = px.line(df, x='timestamp', y='profit', color='pair', title="Equity Curve")
+      st.plotly_chart(fig)
+      heatmap_data = pl.read_csv("hourly_pnl_heatmap.csv").pivot(index="hour", columns="pair", values="pnl")
+      fig_heatmap = px.imshow(heatmap_data, title="Hourly PnL Heatmap")
+      st.plotly_chart(fig_heatmap)
+      st.subheader("ポジション")
+      positions = pl.read_csv("positions.csv")
+      st.table(positions[["pair", "direction", "entry_price", "tp", "sl", "gslo", "unrealized_pnl"]])
+      st.subheader("シグナル候補")
+      signals = pl.read_csv("signal_candidates.csv")
+      st.table(signals[["pair", "direction", "price", "conditions", "score"]])
+      st.subheader("AI/Optuna提案")
+      proposals = pl.read_csv(f"ai_proposals_{datetime.now().strftime('%Y%m%d')}.csv")
+      st.table(proposals[["proposal_id", "pair", "parameters", "sharpe_ratio", "status"]])
+  ```
+
+### 6.4 経済ニュース・指標の表示
+- **データソース**：
+  - ニュース：`newsapi-python`（発表日時、タイトル、概要、URL）。
+  - 指標：`investpy`（発表日時、関係通貨、イベント名、重要度）。
+- **表示形式**：
+  - テーブル：時間（24時間形式）、イベント名、通貨、説明、重要度。
+  - 例：`2025-06-05 21:30 | 米NFP | USD | 高インパクト雇用統計 | 高`。
+  - 高/中重要度は薄ピンク背景（`config.json`の`impact=high|medium`）。
+- **更新頻度**：
+  - リアルタイム：WebSocketで5分ポーリング（`monitor.py`）。
+  - 削除：発表から24時間経過または終了後（`news_indicators`キャッシュ、TTL=86400秒）。
+- **翻訳**：
+  - `deep_translator`（GoogleTranslator）でタイトルと概要を日本語化。
+  - 例：`Federal Reserve Interest Rate Decision`→`連邦準備制度金利決定`。
+- **実装**：
+  - `monitor.py`でデータ取得、Redisキャッシュ（`news_indicators`）。
+  - `dashboard.py`でテーブル表示。
+
+### 6.5 セキュリティ要件
+- **認証**：
+  - JWTトークン（`flask-jwt-extended`）：ログイン時に発行、有効期限30分。
+  - 2段階認証：TOTP（`pyotp`、QRコードでセットアップ）。
+- **アクセス制御**：
+  - IPホワイトリスト：`config.json`（`allowed_ips: ["192.168.1.0/24"]`）。
+  - 認証失敗：3回で1時間ロック、Discord #alertsに通知（例：「Login Failed: IP=192.168.1.100」）。
+- **操作ミス防止**：
+  - 設定変更は2段階確認（プレビュー→適用）。
+  - 操作ログ：`user_action_log.csv`（直近100件、例：`2025-06-05 20:12, admin, config_update, success`）。
+- **ログ監視**：
+  - セキュリティログ：`security_log.csv`（例：`2025-06-05 20:12, admin, login, 192.168.1.1, success`）。
+  - 同期エラー：`sync_error_log.csv`（`config.json`とUIの不整合）。
+- **実装**：
+  - `dashboard_server.py`で認証・アクセス制御。
+  - `bot.py`で不正アクセス通知。
+
+### 6.6 用語解説
+- **表示**：
+  - 専用タブで`glossary.json`の内容を表示。
+  - 例：`RSI買い (rsi_long): RSIがこの値を上回ると買いシグナルの条件を満たす...`。
+- **実装**：
+  - `dashboard.py`で`glossary.json`を読み込み、テーブル形式で表示。
+  - 例：
+    ```python
+    import json
+    with open("glossary.json", "r") as f:
+        glossary = json.load(f)
+    st.table(pd.DataFrame(glossary, columns=["term", "description"]))
+    ```
+- **保守**：
+  - `glossary.json`を更新後、ダッシュボードで即時反映（`config.py`）。
+
+### 6.7 パラメータ設定ページ
+- **目的**：`config.json`のパラメータをダッシュボードおよびDiscordで直感的に編集、運用者の負担を軽減。
+- **機能**：
+  - **一覧表示**：`config.json`の主要パラメータ（トレードロジック、TP/SL、ニュース・指標、リスク管理、通知、AI、セキュリティ）をテーブル形式で表示。
+  - **編集**：入力フォーム（数値、テキスト）、トグルスイッチ（オンオフ）で編集。
+  - **保存**：大きな「設定」ボタンで変更を`config.json`に反映、`jsonschema`でバリデーション。
+  - **Discord連携**：`!approve <proposal_id>`でAI提案を適用、`!summary <pair>`でパラメータ確認。
+- **表示項目**（例）：
+  - 通貨ペア別パラメータ：
+    - `USDJPY.rsi_long`（現在の値：55、新しい値：[60]）。
+    - `EURJPY.squeeze_threshold_m15`（現在の値：0.85、新しい値：[0.9]）。
+    - `AUDJPY.high_impact.exclude_before`（現在の値：45、新しい値：[60]）。
+  - 共通パラメータ：
+    - `notification_discord_enabled`（現在の値：True、新しい値：[Toggle]）。
+    - `ai_optuna_enabled`（現在の値：True、新しい値：[Toggle]）。
+    - `risk_per_trade`（現在の値：0.01、新しい値：[0.015]）。
+- **実装**：
+  - **フロントエンド**：React（`react-table`, `react-hook-form`, `react-switch`）、Streamlit（`st.data_editor`）。
+  - **バックエンド**：Flask API（`/api/config`）、`jsonschema`でバリデーション。
+  - **バリデーション**：
+    - 数値：範囲内（例：`rsi_long` 50～60）。
+    - 通知：少なくとも1チャネル有効（Discord、メール、Slack、LINE、Teams）。
+    - ログ：変更履歴を`config_log_YYYYMMDD.csv`に記録（`timestamp, parameter, old_value, new_value, user_id`）。
+- **UI例**（テキストベース）：
+  ```
+  [パラメータタブ]
+  - テーブル：
+    | パラメータ                  | 現在の値 | 新しい値 |
+    |----------------------------|----------|----------|
+    | USDJPY.rsi_long            | 55       | [60]     |
+    | EURJPY.squeeze_threshold_m15 | 0.85    | [0.9]    |
+    | AUDJPY.high_impact.exclude_before | 45 | [60]     |
+    | notification_discord_enabled | True    | [Toggle] |
+    | ai_optuna_enabled          | True     | [Toggle] |
+    | risk_per_trade             | 0.01     | [0.015]  |
+  - ボタン：[設定] (config.jsonを更新)
+  - エラーメッセージ："少なくとも1つの通知チャネルを有効にしてください"
+  ```
+- **成果品**：
+  - ファイル：`/src/dashboard.py`, `/src/bot.py`, `/static/parameter_page.js`, `/templates/parameter.html`。
+  - ログ：`config_log_YYYYMMDD.csv`。
+
+### 6.7.1 パラメータ設定項目、用途及び初期設定値
+本セクションでは、「パラメータ」タブおよびDiscordコマンド（`!approve`, `!summary`）で設定可能な全パラメータを一覧化します。各パラメータの項目名、用途、初期設定値、設定範囲を記載し、通貨ペア別（USD/JPY、EUR/JPY、GBP/JPY、AUD/JPY）または共通で定義します。すべてのパラメータは`config.json`に保存され、`jsonschema`でバリデーション後適用されます。通知チャネル（Discord追加）、AI/Optuna（LightGBM、Optuna）、セキュリティ、システム監視のパラメータを強化し、運用者の柔軟なカスタマイズを可能にします。
+
+#### 通貨ペア別のパラメータ
+1. **トレードロジック（セクション4）**
+   - **EMA（指数移動平均）**：
+     - **USD/JPY, EUR/JPY, GBP/JPY, AUD/JPY**：
+       - 短期：5期間（`ema_short`）。
+       - 中期：20期間（`ema_mid`）。
+       - H1短期：5期間（`ema_h1_short`）。
+       - H1中期：20期間（`ema_h1_mid`）。
+     - **用途**：トレンド方向判定（ゴールデンクロス/デッドクロス）、H1でスコア補正。
+     - **設定範囲**：短期5～10、中期20～50、H1同等。
+   - **RSI（相対力指数）**：
+     - **USD/JPY**：
+       - 期間：7（`rsi_period`）。
+       - ロング閾値：55（`rsi_long`）。
+       - ショート閾値：45（`rsi_short`）。
+       - スクイーズロング：40（`rsi_long_squeeze`）。
+       - スクイーズショート：60（`rsi_short_squeeze`）。
+       - エグジットロング：48（`rsi_exit_long`）。
+       - エグジットショート：52（`rsi_exit_short`）。
+       - スクイーズエグジットロング：50（`rsi_exit_long_squeeze`）。
+       - スクイーズエグジットショート：50（`rsi_exit_short_squeeze`）。
+     - **EUR/JPY, GBP/JPY, AUD/JPY**：同上。
+     - **用途**：モメンタム確認、エントリー/エグジット条件。
+     - **設定範囲**：期間7～14、ロング50～60、ショート40～50、スクイーズ40～60、エグジット48～52。
+   - **ADX（平均方向性指数）**：
+     - **USD/JPY**：
+       - 期間：14（`adx_period`）。
+       - 閾値：25（`adx_threshold`）。
+       - スクイーズ閾値：15（`adx_threshold_squeeze`）。
+     - **EUR/JPY, GBP/JPY, AUD/JPY**：同上。
+     - **用途**：トレンド強度確認、スクイーズ優先判定。
+     - **設定範囲**：期間14固定、閾値20～30、スクイーズ15～20。
+   - **ATR（平均真の値幅）**：
+     - **USD/JPY**：
+       - 期間：14（`atr_period`）。
+       - スクイーズ閾値：8pips（`atr_threshold`）。
+     - **EUR/JPY, GBP/JPY, AUD/JPY**：同上。
+     - **用途**：TP/SL、トレーリングストップ、GSLO、スクイーズボラ確認。
+     - **設定範囲**：期間14固定、スクイーズ8～12pips。
+   - **ボリンジャーバンド（BBands）**：
+     - **USD/JPY**：
+       - 期間：20（`bbands.period`）。
+       - 標準偏差：2（`bbands.std_dev`）。
+       - スクイーズ閾値：0.85（`squeeze_threshold_m15`）。
+     - **EUR/JPY**：スクイーズ閾値：0.86。
+     - **GBP/JPY**：スクイーズ閾値：0.87。
+     - **AUD/JPY**：スクイーズ閾値：0.88。
+     - **用途**：スクイーズ戦略のブレイクアウト検知。
+     - **設定範囲**：期間20固定、標準偏差1.5～2.5、スクイーズ0.75～0.95。
+   - **MACDヒストグラム**：
+     - **USD/JPY, EUR/JPY, GBP/JPY, AUD/JPY**：
+       - 短期EMA：12（`macd_fast`）。
+       - 長期EMA：26（`macd_slow`）。
+       - シグナル線：9（`macd_signal`）。
+       - 閾値：0.001（`macd_histogram_threshold`）。
+     - **用途**：スクイーズのブレイク方向判定。
+     - **設定範囲**：短期12～20、長期26～50、シグナル9～12、閾値0.0005～0.002。
+   - **包み足フィルター**：
+     - **USD/JPY, EUR/JPY, GBP/JPY, AUD/JPY**：
+       - 有効/無効：True（`use_engulfing_filter`）。
+     - **用途**：スクイーズの誤エントリー抑制。
+     - **設定範囲**：True/False。
+   - **Position Book閾値**：
+     - **USD/JPY**：
+       - 半ロット：0.65（`orderbook_half_threshold`）。
+       - フルロット：0.75（`orderbook_full_threshold`）。
+     - **EUR/JPY**：0.66、0.76。
+     - **GBP/JPY**：0.70、0.80。
+     - **AUD/JPY**：0.65、0.75。
+     - **用途**：フェイクブレイク排除、ロット調整。
+     - **設定範囲**：半ロット0.55～0.70、フルロット0.65～0.80。
+   - **RSI＋BBands統合閾値**：
+     - **USD/JPY**：
+       - RSI閾値：58（`dynamic_rsi_threshold`）。
+       - BBands幅：0.08（`dynamic_bb_width`）。
+     - **EUR/JPY**：58、0.09。
+     - **GBP/JPY**：58、0.10。
+     - **AUD/JPY**：58、0.09。
+     - **用途**：低勝率ゾーン排除。
+     - **設定範囲**：RSI50～60、BBands幅0.08～0.12。
+   - **DI差閾値（ADX）**：
+     - **USD/JPY**：10（`di_diffThreshold`）。
+     - **EUR/JPY**：12。
+     - **GBP/JPY**：14。
+     - **AUD/JPY**：12。
+     - **用途**：ADXフィルターのノイズ除去。
+     - **設定範囲**：10～15。
+   - **優先バー数**：
+     - **USD/JPY, EUR/JPY, GBP/JPY, AUD/JPY**：
+       - 3（`priority_bars`）。
+     - **用途**：スクイーズ戦略の優先判定。
+     - **設定範囲**：2～5。
+2. **TP/SL・トレーリングストップ（セクション5）**
+   - **ストップロス（SL）マルチプライヤー**：
+     - **USD/JPY, EUR/JPY, GBP/JPY, AUD/JPY**：
+       - 2.0（`sl_mult`）。
+     - **用途**：損失制限（ATRベース）。
+     - **設定範囲**：1.5～2.5。
+   - **テイクプロフィット（TP）マルチプライヤー**：
+     - **USD/JPY, EUR/JPY, GBP/JPY, AUD/JPY**：
+       - 1.5（`tp_mult`）。
+     - **用途**：利益確定（SLの倍数）。
+     - **設定範囲**：1.2～2.0。
+   - **トレーリングストップマルチプライヤー**：
+     - **USD/JPY, EUR/JPY, GBP/JPY, AUD/JPY**：
+       - 1.2（`trail_mult`）。
+     - **用途**：利益確保（ATRベース）。
+     - **設定範囲**：1.0～1.5。
+   - **GSLO閾値**：
+     - **USD/JPY, EUR/JPY, GBP/JPY, AUD/JPY**：
+       - 15pips（`gslo_atr_threshold`）。
+     - **用途**：高ボラ時の損失保証。
+     - **設定範囲**：10～20pips。
+   - **RSI変化率閾値（スクイーズ早期エグジット）**：
+     - **USD/JPY, EUR/JPY, GBP/JPY, AUD/JPY**：
+       - -5（`delta_rsi_threshold`）。
+     - **用途**：スクイーズの損失縮小。
+     - **設定範囲**：-5～5。
+3. **経済ニュース・指標（セクション7）**
+   - **取引停止時間（高インパクト指標）**：
+     - **USD/JPY**：
+       - 発表前：30分（`high_impact.exclude_before`）。
+       - 発表後：60分（`high_impact.exclude_after`）。
+     - **EUR/JPY**：30分、60分。
+     - **GBP/JPY**：30分、60分。
+     - **AUD/JPY**：45分、90分。
+     - **用途**：高インパクト指標（例：米NFP）のリスク回避。
+     - **設定範囲**：前15～60分、後30～120分。
+   - **取引停止時間（中インパクト指標）**：
+     - **USD/JPY**：
+       - 発表前：15分（`medium_impact.exclude_before`）。
+       - 発表後：15分（`medium_impact.exclude_after`）。
+     - **EUR/JPY, GBP/JPY**：15分、15分。
+     - **AUD/JPY**：20分、20分。
+     - **用途**：中インパクト指標（例：豪CPI）のリスク回避。
+     - **設定範囲**：前10～30分、後10～30分。
+
+#### 通貨ペア共通のパラメータ
+1. **トレードロジック（セクション4）**
+   - **スプレッド閾値**：
+     - 3倍（`spread_threshold`）。
+     - **用途**：高スプレッド（過去1時間平均の3倍超）のエントリー抑制。
+     - **設定範囲**：2～5倍。
+   - **スプレッドZスコア閾値**：
+     - 2（`spread_zscore_threshold`）。
+     - **用途**：スプレッド急騰検知（Z-score>2で30分停止）。
+     - **設定範囲**：1.5～3。
+   - **ボラティリティ閾値**：
+     - 2倍（`volatility_threshold`）。
+     - **用途**：高ボラ（ATRが1時間平均の2倍超）のエントリー抑制。
+     - **設定範囲**：1.5～3倍。
+   - **ADX使用フラグ**：
+     - True（`use_adx`）。
+     - **用途**：ADXフィルターの有効/無効。
+     - **設定範囲**：True/False。
+   - **Position Book使用フラグ（トレンド）**：
+     - False（`use_position_book_trend`）。
+     - **用途**：トレンド戦略でのPosition Bookフィルターの有効/無効。
+     - **設定範囲**：True/False。
+   - **スクイーズフィルター使用フラグ**：
+     - True（`use_squeeze_filter`）。
+     - **用途**：RSI＋BBands統合閾値の有効/無効。
+     - **設定範囲**：True/False。
+   - **早期エグジット使用フラグ（スクイーズ）**：
+     - True（`use_early_exit_squeeze`）。
+     - **用途**：スクイーズの早期エグジット（RSI変化率）の有効/無効。
+     - **設定範囲**：True/False。
+   - **シグナルスコア閾値**：
+     - 0.65（`score_threshold`）。
+     - **用途**：動的スコアリングのエントリー閾値。
+     - **設定範囲**：0.55～0.75。
+   - **クールダウン期間**：
+     - 1時間（`cooldown_period`）。
+     - **用途**：同一方向シグナルの連続抑制。
+     - **設定範囲**：30分～2時間。
+2. **リスク管理（セクション9）**
+   - **ポジションサイズ**：
+     - 1%（`risk_per_trade`）。
+     - **用途**：トレードごとのリスク制限。
+     - **設定範囲**：0.5～2%。
+   - **最大ポジション数（通貨ペアごと）**：
+     - 1（`max_positions_per_pair`）。
+     - **用途**：通貨ペアごとのポジション制限。
+     - **設定範囲**：1～2。
+   - **最大ポジション数（合計）**：
+     - 2（`max_total_positions`）。
+     - **用途**：全通貨ペアのポジション制限。
+     - **設定範囲**：2～4。
+   - **Account Exposure閾値**：
+     - 0.4（`exposure_threshold`）。
+     - **用途**：ロット調整（>0.4で50%カット）。
+     - **設定範囲**：0.3～0.5。
+   - **残高不足（絶対閾値）**：
+     - ¥1,000,000（`absolute_threshold`）。
+     - **用途**：新規エントリー禁止。
+     - **設定範囲**：¥500,000～¥2,000,000。
+   - **残高不足（相対閾値）**：
+     - 50%（`relative_threshold`）。
+     - **用途**：新規エントリー禁止。
+     - **設定範囲**：30～70%。
+3. **通知（セクション7）**
+   - **Discord通知有効化**：
+     - True（`notification_discord_enabled`）。
+     - **用途**：Discord通知（`discord.py`）の有効/無効。
+     - **設定範囲**：True/False。
+   - **メール通知有効化**：
+     - True（`notification_email_enabled`）。
+     - **用途**：メール通知（`smtplib`）の有効/無効。
+     - **設定範囲**：True/False。
+   - **Slack通知有効化**：
+     - True（`notification_slack_enabled`）。
+     - **用途**：Slack通知（`slack_sdk`）の有効/無効。
+     - **設定範囲**：True/False。
+   - **LINE通知有効化**：
+     - False（`notification_line_enabled`）。
+     - **用途**：LINE通知（`linebot`）の有効/無効。
+     - **設定範囲**：True/False。
+   - **Microsoft Teams通知有効化**：
+     - False（`notification_teams_enabled`）。
+     - **用途**：Teams通知（`pymsteams`）の有効/無効。
+     - **設定範囲**：True/False。
+   - **通知テンプレート**：
+     - "default"（`notification_template`）。
+     - **用途**：通知メッセージのフォーマット。
+     - **設定範囲**：["default", "detailed", "minimal"]。
+4. **AI/Optuna連携（セクション10）**
+   - **Optuna有効化**：
+     - True（`ai_optuna_enabled`）。
+     - **用途**：Optunaによるパラメータ最適化の有効/無効。
+     - **設定範囲**：True/False。
+   - **LightGBM有効化**：
+     - True（`ai_lightgbm_enabled`）。
+     - **用途**：LightGBMによるシグナルフィルタリングの有効/無効。
+     - **設定範囲**：True/False。
+   - **自動適用フラグ**：
+     - False（`ai_auto_apply_enabled`）。
+     - **用途**：AI提案の自動適用（シャープレシオ+0.05以上）の有効/無効。
+     - **設定範囲**：True/False。
+   - **Optuna試行回数**：
+     - 100（`optuna_trials`）。
+     - **用途**：日次の最適化試行回数。
+     - **設定範囲**：50～200。
+5. **セキュリティ（セクション6, 11）**
+   - **IPホワイトリスト**：
+     - ["192.168.1.0/24"]（`allowed_ips`）。
+     - **用途**：ダッシュボードへのアクセス制限。
+     - **設定範囲**：IPアドレスリスト。
+   - **セッションタイムアウト**：
+     - 30分（`session_timeout`）。
+     - **用途**：認証セッションの有効期間。
+     - **設定範囲**：15～60分。
+   - **2段階認証フラグ**：
+     - True（`two_factor_auth_enabled`）。
+     - **用途**：TOTP（QRコード）の有効/無効。
+     - **設定範囲**：True/False。
+6. **システム監視（セクション11）**
+   - **CPU使用率閾値**：
+     - 80%（`cpu_threshold`）。
+     - **用途**：高負荷警告。
+     - **設定範囲**：70～90%。
+   - **メモリ使用率閾値**：
+     - 80%（`memory_threshold`）。
+     - **用途**：高負荷警告。
+     - **設定範囲**：70～90%。
+   - **APIレイテンシ閾値**：
+     - 150ms（`api_latency_threshold`）。
+     - **用途**：OANDA API通信遅延の警告。
+     - **設定範囲**：100～200ms。
+
+### 6.8 実装例（dashboard_server.py）
+```python
+from flask import Flask, jsonify, request
+from flask_socketio import SocketIO
+from flask_jwt_extended import JWTManager, jwt_required, create_access_token
+import redis
+import json
+import polars as pl
+from deep_translator import GoogleTranslator
+import jsonschema
+import logging
+from datetime import datetime
+from cryptography.fernet import Fernet
+
+app = Flask(__name__)
+app.config['JWT_SECRET_KEY'] = 'secure_key'
+jwt = JWTManager(app)
+socketio = SocketIO(app)
+redis_client = redis.Redis(host='localhost', port=6379)
+cipher = Fernet(Fernet.generate_key())
+
+@app.route('/api/login', methods=['POST'])
+def login():
+    user = request.json.get('username')
+    password = request.json.get('password')
+    totp_code = request.json.get('totp_code')
+    if user == 'admin' and password == 'secure_password' and verify_totp(totp_code):
+        access_token = create_access_token(identity=user)
+        with open(f"security_log_{datetime.now().strftime('%Y%m%d')}.csv", "a") as f:
+            f.write(f"{datetime.now()},{user},login,{request.remote_addr},success\n")
+        return jsonify({'access_token': access_token}), 200
+    with open(f"security_log_{datetime.now().strftime('%Y%m%d')}.csv", "a") as f:
+        f.write(f"{datetime.now()},{user},login_failed,{request.remote_addr},failure\n")
+    return jsonify({'error': 'Invalid credentials or OTP'}), 401
+
+@app.route('/api/positions', methods=['GET'])
+@jwt_required()
+def get_positions():
+    positions = redis_client.get(f"positions_{datetime.now().strftime('%Y%m%d')}")
+    if positions:
+        return jsonify(json.loads(positions['data'])), 200
+    return jsonify([]), 200
+
+@app.route('/api/news', methods=['GET'])
+@jwt_required()
+def get_news():
+    news = redis_client.get('news_indicators')
+    if news:
+        news_data = json.loads(news)
+        translated = [
+            {
+                'time': row['time'],
+                'event': GoogleTranslator(source='en', target='ja').translate(row['event']),
+                'currency': row['currency'],
+                'description': GoogleTranslator(source='en', target('ja').translate(row['description']),
+                'impact': row['impact']
+            }
+            for row in news_data
+        ]
+        return jsonify(translated), 200
+    return jsonify([]), 200
+
+@app.route('/api/config', methods=['GET'])
+@jwt_required()
+def get_config():
+    with open('config.json', 'r') as f:
+        config = json.load(f)
+    config['oanda_api_token'] = cipher.decrypt(config['oanda_api_token'].encode()).decode()
+    return jsonify(config), 200
+
+@app.route('/api/config', methods=['PATCH'])
+@jwt_required()
+def update_config():
+    new_config = request.json
+    try:
+        with open('config_schema.json', 'r') as f:
+            schema = json.load(f)
+        jsonschema.validate(new_config, schema)
+        notification_enabled = any([
+            new_config.get('notification_discord_enabled', False),
+            new_config.get('notification_email_enabled', False),
+            new_config.get('notification_slack_enabled', False),
+            new_config.get('notification_line_enabled', False),
+            new_config.get('notification_teams_enabled', False)
+        ])
+        if not notification_enabled:
+            raise jsonschema.ValidationError("At least one notification channel must be enabled")
+        with open('config.json', 'r+') as f:
+            config = json.load(f)
+            config.update(new_config)
+            f.seek(0)
+            json.dump(config, f, indent=2)
+        with open(f"config_log_{datetime.now().strftime('%Y%m%d')}.csv", "a") as f:
+            f.write(f"{datetime.now()},{json.dumps(new_config, indent=2)},success\n")
+        channel = bot.get_channel(config['discord_config_channel_id'])
+        asyncio.run(channel.send(f"Config Updated: {json.dumps(new_config)}"))
+        return jsonify({'status': 'success'}), 200
+    except Exception as e:
+        logging.error(f"Config update failed: {e}")
+        return jsonify({'error': str(e)}), 500
+```
+
+### 6.9 実装例（bot.py）
+```python
+import discord
+import asyncio
+import plotly.express as px
+import polars as pl
+import json
+from discord.ext import bot as commands
+from datetime import datetime
+
+class TradingBot(commands.Bot):
+    def __init__(self, config):
+        super().__init__(command_prefix='!')
+        self.config = config
+        self.signal_processor = SignalProcessor(config, self)
+
+    @commands.command(name='approve')
+        async def approve(self, event, proposal_id: str):
+            proposal = pl.read_csv(f"ai_proposals_{datetime.now().strftime('%Y%m%d')}.csv").filter(pl.col('proposal_id') == proposal_id)
+            if not proposal.is_empty():
+                params = proposal['parameters'][0]
+                with open('config.json', 'r+') as f:
+                    config = json.load(f)
+                    config.update(params)
+                    f.seek(0)
+                    json.dump(config, f, indent=4)
+                await ctx.send(f"Proposal {proposal_id} applied: {params}")
+                with open(f"config_log_{datetime.now().strftime('%Y%m%d')}.csv", "a") as f:
+                    f.write(f"{datetime.now()},approve,{proposal_id},{params}\n")
+            else:
+                await ctx.send(f"Proposal {proposal_id} not found")
+
+        @commands.command(name='reject')
+        async def reject(self, ctx, proposal_id: str, reason: str = "No reason provided"):
+            proposal = pl.read_csv(f"ai_proposals_{datetime.now().strftime('%Y%m%d')}.csv").filter(pl.col('proposal_id') == proposal_id)
+            if not proposal.is_empty():
+                with open(f"ai_proposals_{datetime.now().strftime('%Y%m%d')}.csv", "a") as f:
+                    f.write(f"{proposal_id},{proposal['parameters'][0]},rejected,{reason}\n")
+                await ctx.send(f"Proposal {proposal_id} rejected: {reason}")
+            else:
+                await ctx.send(f"Proposal {proposal_id} not found")
+
+        @commands.command(name='pause')
+        async def pause(self, ctx, pair: str):
+            with open('config.json', 'r+') as f:
+                config = json.load(f)
+                config['enabled_pairs'][pair] = False
+                f.seek(0)
+                json.dump(config, f, indent=4)
+            await ctx.send(f"Trading paused for {pair}")
+            with open(f"config_log_{datetime.now().strftime('%Y%m%d')}.csv", "a") as f:
+                f.write(f"{datetime.now()},pause,{pair},disabled\n")
+
+        @commands.command(name='resume')
+        async def resume(self, ctx, pair: str):
+            with open('config.json', 'r+') as f:
+                config = json.load(f)
+                config['enabled_pairs'][pair] = True
+                f.seek(0)
+                json.dump(config, f, indent=4)
+            await ctx.send(f"Trading resumed for {pair}")
+            with open(f"config_log_{datetime.now().strftime('%Y%m%d')}.csv", "a") as f:
+                f.write(f"{datetime.now()},resume,{pair},enabled\n")
+
+        @commands.command(name='summary')
+        async def summary(self, ctx, pair: str):
+            trades = pl.read_csv(f"trade_log_{datetime.now().strftime('%Y%m%d')}.csv").filter(pl.col('pair') == pair)
+            summary = trades.select([
+                pl.col('profit').mean().alias('avg_profit'),
+                pl.col('score').mean().alias('avg_score'),
+                pl.col('trade_id').count().alias('trade_count')
+            ])
+            await ctx.send(f"{pair} Summary: Trades={summary['trade_count'][0]}, AvgProfit={summary['avg_profit'][0]:.2f}pips, AvgScore={summary['avg_score'][0]:.2f}")
+            df = pl.DataFrame({'price': trades['close'][-5:], 'time': trades['timestamp'][-5:]})
+            fig = px.line(df, x='time', y='price', title=f'{pair} Recent Trades')
+            fig.write_image(f'chart_{pair}.png')
+            with open(f'chart_{pair}.png', 'rb') as f:
+                await ctx.send(file=discord.File(f))
+```
+
+## 7. ニュース・経済指標
+本セクションでは、経済ニュース・指標に基づく取引抑制の仕様を定義します。Pythonがニュース取得（`newsapi-python`）、指標スケジュール（`investpy`）、スプレッド監視（`/pricing/stream`）を管理し、OANDA APIでリアルタイムデータを提供します。高インパクト指標（例：米NFP）の前30分～後60分で取引を停止し、Discord（#alerts）、メール、Slack、LINE、Teamsで通知します。レイテンシ<150ms、運用負荷10-20%削減を目標とします。
+
+### 7.1 データソース
+- **経済指標**：
+  - ソース：`investpy`（例：米NFP、ECB金利決定、BOJ政策決定）。
+  - 頻度：日次更新、24時間以内の高インパクトイベントを監視。
+  - データ形式：JSON（`event_time`, `currency`, `impact`, `name`）。
+  - 例：`{"event_time": "2025-06-05 21:30", "currency": "USD", "impact": "high", "name": "Non-Farm Payrolls"}`.
+- **ニュース**：
+  - ソース：`newsapi-python`, `feedparser`（例：FOMC発言、突発ニュース）。
+  - 頻度：リアルタイム（5分間隔）。
+  - 翻訳：`deep_translator`で日本語に変換（例：「FOMC maintains rates」→「FOMC、金利据え置き」）。
+  - キャッシュ：Redis（news_indicators、TTL=300秒）。
+- **スプレッド**：
+  - ソース：OANDA APIの`/pricing/stream`（250msティック、spread列）。
+  - 用途：突発ニュース検知（スプレッド3倍超）、Z-score>2で警告。
+  - ログ：spread_log.csv（timestamp, pair, spread, z_score）。
+
+### 7.2 取引停止条件
+- **高インパクト指標**：
+  - 対象：米NFP、ECB金利決定、BOJ政策決定等（impact="high"）。
+  - 停止期間：開始前30分～終了後60分（economic_events.exclude_before=1800s, exclude_after=3600s）。
+  - 通貨ペア別設定：
+    - USD/JPY：米指標（USD関連）。
+    - EUR/JPY：欧州指標（EUR関連）。
+    - GBP/JPY、AUD/JPY：対応通貨の指標。
+  - 例：米NFP（2025-06-05 21:30）でUSD/JPYを21:00～22:30停止。
+- **要人発言**：
+  - スケジュール発言（例：FOMC記者会見）：前後15分除外（news_events.exclude_before/after=900s）。
+  - 突発発言：スプレッドが過去1時間平均の3倍超で30分停止（duration=1800s）。
+  - 例：スプレッド5pips（USD/JPY、通常1.5pips）で30分停止。
+- **実装**：
+  - monitor.pyでイベントスケジュールとスプレッドを監視。
+  - 例：
+    ```python
+    if event['impact'] == 'high' and abs(event['time'] - now) < config['economic_events']['exclude_before'] + config['exclude_after']:
+        halt_trading(pair, duration=90*60, reason=f"High-impact event: {event['name']}")
+    ```
+  - ログ：trading_halt_YYYYMMDD.csv（timestamp, pair, duration, reason）。
+
+### 7.3 スプレッド監視
+- **閾値**：
+  - 過去1時間平均の3倍超（例：USD/JPY=3pips, EUR/JPY=4pips, GBP/JPY=5pips, AUD/JPY=4pips, spread_threshold）。
+  - Z-score>2（spread_zscore_threshold）。
+- **アクション**：
+  - スプレッド超過で30分取引停止（halt_trading）。
+  - スプレッド感知注文（triggerCondition=MID）で発注タイミング最適化。
+  - Discord #alertsに通知（例：「USDJPY Spread Spike: 5.2pips, Z-score=2.5, Paused 30min」）。
+- **実装**：
+  - monitor.pyのSpreadMonitorで/pricing/stream（spread列）を250ms監視。
+  - 例：
+    ```python
+    async def monitor_spread(self, pair):
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                f"https://api-fxpractice.oanda.com/v3/pricing/stream?instruments={pair.replace('/', '_')}",
+                headers={"Authorization": f"Bearer {self.config['oanda_api_token']}"}
+            ) as resp:
+                async for line in resp.content:
+                    data = json.loads(line.decode('utf-8'))
+                    if 'bids' in data and 'asks' in data:
+                        bid = float(data['bids'][0]['price'])
+                        ask = float(data['asks'][0]['price'])
+                        spread = (ask - bid) * 10000
+                        z_score = (spread - spread_mean) / spread_std
+                        if z_score > self.config['spread_zscore_threshold']:
+                            self.halt_trading(pair, duration=1800, reason=f"High spread: {spread:.2f}pips")
+                            await self.send_discord_alert(f"Spread Alert: {pair}, {spread:.2f}pips, Z-score={z_score:.2f}")
+    ```
+  - ログ：spread_log.csv（timestamp, pair, spread, z_score, action）。
+
+### 7.4 通知
+- **チャネル**：
+  - Discord：#alerts（エントリー、エグジット、AIアドバイス、スプレッド警告、チャート画像）。
+  - メール：SMTP（smtplib）。
+  - Slack：slack_sdk。
+  - LINE：linebot。
+  - Microsoft Teams：pymsteams。
+- **タイミング**：
+  - リアルタイム：<1秒（Webhook、Discord.py）。
+  - 取引停止：開始/終了時（例：「USDJPY Trading Halted: NFP at 2025-06-05 21:30」）。
+  - 高スプレッド：検知時（例：「USDJPY Spread Spike: 5.2pips」）。
+  - 日次要約：!summaryコマンド（例：「USDJPY: Trades=5, AvgProfit=20pips」）。
+- **内容**：
+  - エントリー：ペア、シグナル、スコア、ロット（例：「USDJPY Long, Score=0.75, Lot=100%」）。
+  - エグジット：ペア、利益/損失（例：「USDJPY Exit, Profit=120pips」）。
+  - AIアドバイス：パラメータ提案（例：「rsi_long=58, Sharpe+0.05」）。
+  - スプレッド警告：Z-score>2（例：「USDJPY Spread: 5.2pips, Z-score=2.5」）。
+  - チャート画像：Plotlyでエントリー/エグジット位置付き（<10MB）。
+- **実装**：
+  - bot.py（Discord.py）で通知、コマンド処理。
+  - webhook.pyでOANDA APIイベント（Transactions Stream、Position Book）を#alertsに送信。
+  - 例：
+    ```python
+    async def send_discord_alert(self, message, pair, priority='high'):
+        channel = self.bot.get_channel(self.config['discord_alerts_channel'])
+        await channel.send(message)
+        if priority == 'high':
+            for ch in self.config['notification_channels'][priority]:
+                if ch == 'slack':
+                    self.slack_client.chat_postMessage(channel=self.config['slack_channel'], text=message)
+                elif ch == 'email':
+                    with smtplib.SMTP(self.config['smtp_server']) as server:
+                        server.sendmail(self.config['smtp_from'], self.config['smtp_to'], message)
+        with open(f"notification_log_{datetime.now().strftime('%Y%m%d')}.csv", 'a') as f:
+            f.write(f"{datetime.now()},{pair},{priority},{message},success\n")
+    ```
+- **ログ**：notification_log_YYYYMMDD.csv（timestamp, channel, message, status）。
+
+### 7.5 バックテスト連携
+- **シナリオ**：
+  - 高インパクト指標の前30分～後60分で取引停止をシミュレーション。
+  - 突発ニュース（スプレッド3倍超）の影響を再現（spread_log.csv）。
+- **実装**：
+  - optimize.pyでイベントデータを統合。
+  - 例：
+    ```python
+    if event['time'] in candle['time'] and event['impact'] == 'high':
+        skip_trade(candle, reason="high_impact_event")
+    ```
+- **検証**：
+  - 取引停止による損失回避率：損失トレード10%削減。
+  - スプレッド急騰時のスキップ効果：PF+0.05。
+- **ログ**：backtest_YYYYMMDD.csv（event_impact, trade_skipped, profit）。
+
+### 7.6 実装例（monitor.py）
+```python
+import investpy
+import newsapi
+from datetime import datetime, timedelta
+import logging
+import aiohttp
+import json
+from deep_translator import GoogleTranslator
+from slack_sdk import WebClient
+from discord.ext import commands
+
+class EventMonitor:
+    def __init__(self, config, discord_bot):
+        self.config = config
+        self.newsapi = newsapi.NewsApiClient(api_key=config['newsapi_key'])
+        self.translator = GoogleTranslator(source='en', target='ja')
+        self.slack_client = WebClient(token=config['slack_token'])
+        self.bot = discord_bot
+
+    async def monitor_spread_stream(self, pair):
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                f"https://api-fxpractice.oanda.com/v3/pricing/stream?instruments={pair.replace('/', '_')}",
+                headers={"Authorization": f"Bearer {self.config['oanda_api_token']}"}
+            ) as resp:
+                async for line in resp.content:
+                    data = json.loads(line.decode('utf-8'))
+                    if 'bids' in data and 'asks' in data:
+                        bid = float(data['bids'][0]['price'])
+                        ask = float(data['asks'][0]['price'])
+                        spread = (ask - bid) * 10000
+                        z_score = (spread - spread_mean) / spread_std
+                        if z_score > self.config['spread_zscore_threshold']:
+                            logging.warning(f"High spread: {pair}, spread={spread:.2f}pips, z_score={z_score:.2f}")
+                            self.halt_trading(pair, duration=1800)
+                            await self.send_discord_alert(f"Spread Alert: {pair}, {spread:.2f}pips, Z-score={z_score:.2f}", pair, 'high')
+                            with open("spread_log.csv", "a") as f:
+                                f.write(f"{datetime.now()},{pair},{spread:.2f},{z_score:.2f},halt\n")
+    ```
+
+## 8. バックテスト
+本セクションでは、バックテストの仕様を定義します。Pythonが`vectorbt`、Numba、DuckDBを使用して過去6か月の15分足およびH1足データを処理し、トレードロジック（セクション4）、TP/SL（セクション5）、ニュース・指標（セクション7）の効果を検証します。プロフィットファクター1.65-1.70、勝率46-60%、最大ドローダウン<7-8%を目標とします。
+
+### 8.1 データソース
+- **価格データ**：
+  - OANDA APIの`/v3/candles`（M15、H1、過去6か月）。
+  - 動的スプレッド：過去1時間平均±2σ（spread_log.csv）。
+  - ストレージ：DuckDBでParquet保存（/data/candles_YYYYMMDD.parquet）。
+- **Position Book**：
+  - `/v3/instruments/{inst}/positionBook`（5分間隔）。
+  - キャッシュ：Redis（orderbook_{pair}）。
+- **ニュース・指標**：
+  - `investpy`：高インパクト指標（例：米NFP）。
+  - `newsapi-python`：突発ニュース（スプレッド急騰）。
+  - ログ：event_log.csv（timestamp, event, impact）。
+
+### 8.2 検証指標
+- **主要指標**：
+  - 勝率：46-60%.
+  - シャープレシオ：>1.0.
+  - 最大ドローダウン：<7-8%.
+  - プロフィットファクター：1.65-1.70.
+  - RR比：>1.5.
+  - 期待値：>0.
+  - シグナル頻度：5-10/日.
+  - スクイーズ成功率：>0.7.
+- **追加指標**：
+  - Position Book効果：勝率+3%, ダマシ削減15%.
+  - LightGBM効果：勝率+5%, PF+0.05.
+  - H1合成効果：I/O削減70%, トレンド一致率+10%.
+  - GSLO効果：損失トレード削減率+5%.
+  - 取引停止効果：損失トレード削減率+10%.
+
+### 8.3 シナリオ
+- **トレンドフォロー＋モメンタム**：
+  - EMAクロス、RSI、ADX、H1 EMA、動的スコアリング、LightGBM.
+- **スクイーズ戦略**：
+  - BBands幅、MACDヒストグラム、包み足フィルター、Position Book.
+- **リスク管理**：
+  - TP/SL、トレーリングストップ、GSLO、部分決済、Account Exposure.
+- **ニュース・指標**：
+  - 高インパクト指標で取引停止.
+  - スプレッド3倍超で30分停止.
+- **実装**：
+  - optimize.pyでシミュレーション.
+  - 例：
+    ```python
+    import vectorbt as vbt
+    signals = vbt.signals.from_pandas(signals_df)
+    portfolio = vbt.Portfolio.from_signals(
+        data['close'], signals, sl_stop=sl, tp_stop=tp, sl_trail=True, fees=0.0001, freq='15min'
+    )
+    ```
+
+### 8.4 検証手順
+- **データ準備**：
+  - DuckDBでParquet読み込み（/data/candles_YYYYMMDD.parquet）.
+  - Position Bookデータをorderbook_{pair}.csvから統合.
+  - H1合成：M15×4終値で生成（I/O削減）.
+- **シミュレーション**：
+  - トレードロジック（セクション4）を再現.
+  - スプレッド、取引停止を動的に適用.
+  - Numbaで計算高速化（CPU負荷25%削減）.
+- **結果分析**：
+  - エクイティカーブ、ドローダウン、ヒートマップを生成.
+  - Discord #strategyに要約送信（例：「USDJPY Backtest: WinRate=48%, PF=1.72」）.
+  - 例：`portfolio.plot_equity().save('equity_curve.png')`.
+- **過学習防止**：
+  - ウォークフォワード分析（3か月インサンプル、1か月アウトサンプル）.
+- **ログ**：
+  - backtest_YYYYMMDD.csv（timestamp, pair, signal, score, lot_ratio, profit, event_impact）.
+  - squeeze_confluence_impact.csv（macd_histogram, engulfing_pattern, result）.
+
+### 8.5 実装例（optimize.py）
+```python
+import vectorbt as vbt
+import polars as pl
+import numpy as np
+from datetime import datetime
+import duckdb
+
+class Backtester:
+    def __init__(self, config):
+        self.config = config
+        self.db = duckdb.connect()
+
+    def run_backtest(self, pair, data, signals):
+        data = data.set_index('timestamp')
+        signals = signals.set_index('timestamp')
+        portfolio = vbt.Portfolio.from_signals(
+            close=data['close'],
+            entries=signals['signal'] == 'long',
+            exits=signals['signal'] == 'short',
+            sl_stop=data['sl'],
+            tp_stop=data['tp'],
+            sl_trail=data['atr'] <= self.config['gslo_atr_threshold'],
+            fees=0.0001,
+            freq='15min'
+        )
+        stats = portfolio.stats()
+        with open(f"backtest_{datetime.now().strftime('%Y%m%d')}.csv", 'a') as f:
+            f.write(f"{pair},{stats['Win Rate [%]']},{stats['Sharpe Ratio']},{stats['Max Drawdown [%]']},{stats['Profit Factor']}\n")
+        portfolio.plot_equity().save(f"equity_curve_{pair}.png")
+        channel = self.bot.get_channel(self.config['discord_strategy_channel'])
+        asyncio.run(channel.send(f"Backtest {pair}: WinRate={stats['Win Rate [%]']:.2f}%, PF={stats['Profit Factor']:.2f}"))
+        return stats
+```
+
+## 9. リスク管理
+本セクションでは、リスク管理の仕様を定義します。Pythonがポジションサイズ、最大ポジション、残高監視、通信エラー、Account Exposureを管理し、OANDA API（`/v3/accounts`, `/v3/positions`, `/transactions/stream`, `/pricing/stream`）でデータ取得します。最大ドローダウン<7-8%、プロフィットファクター1.65-1.70を目標とします。
+
+### 9.1 ポジションサイズ
+- **計算**：
+  - 口座残高の1%をリスク（risk_per_trade=0.01）。
+  - 例：残高100万円、SL=20pips（USD/JPY、pip_value=100円）なら10,000単位。
+  - 式：`units = (balance * risk_per_trade) / (sl_pips * pip_value)`.
+- **動的調整**：
+  - Account Exposure：exposure_ratio = abs(net_position_value)/balance、>0.4でlot_adj=0.5（DD-3%）。
+  - 例：exposure_ratio=0.45ならlot_ratio*=0.5。
+- **実装**：
+  - risk.pyで計算、trade.pyで適用。
+  - 例：
+    ```python
+    def calculate_position_size(self, balance, sl_pips, pair, exposure_ratio):
+        pip_value = self.config['pip_value'][pair]
+        risk = balance * self.config['risk_per_trade']
+        units = risk / (sl_pips * pip_value)
+        lot_adj = 0.5 if exposure_ratio > 0.4 else 1.0
+        return int(units * lot_adj)
+    ```
+- **通知**：高exposure_ratioをDiscord #alertsに送信（例：「USDJPY Exposure Warning: Ratio=0.45, Lot Reduced 50%」）。
+- **ログ**：risk_log_YYYYMMDD.csv（timestamp, pair, units, exposure_ratio, lot_adj）。
+
+### 9.2 最大ポジション
+- **制限**：
+  - ペアごと：1ポジション（max_positions_per_pair=1）。
+  - 全体：2ポジション（max_positions_total=2）。
+- **実装**：
+  - risk.pyでポジション数を監視、/v3/positionsで取得。
+  - 例：
+    ```python
+    def check_max_positions(self, pair):
+        r = AccountDetails(accountID=self.account_id)
+        response = self.client.request(r)
+        positions = response['account']['positions']
+        if len(positions) >= self.config['max_positions_total']:
+            logging.warning(f"Max positions reached: {len(positions)}")
+            return False
+        for pos in positions:
+            if pos['instrument'] == pair.replace('/', '_'):
+                logging.warning(f"Position exists for {pair}")
+                return False
+        return True
+    ```
+- **通知**：最大ポジション超過を#alertsに送信（例：「Max Positions Reached: 2, New Trade Skipped」）。
+- **ログ**：risk_log_YYYYMMDD.csv（timestamp, pair, position_count, action）。
+
+### 9.3 残高監視
+- **閾値**：
+  - 絶対閾値：100万円（absolute_threshold）。
+  - 相対閾値：初期資金の50%（relative_threshold=0.5）。
+- **アクション**：
+  - 閾値以下で新規エントリー禁止。
+  - 既存ポジションのSLをATR×1.0に縮小、または即時クローズ。
+  - Discord #alertsに通知（例：「Low Balance: 950,000 JPY, Trading Halted」）。
+- **実装**：
+  - monitor.pyのBalanceMonitorで/v3/accounts監視。
+  - 例：
+    ```python
+    def monitor_balance(self):
+        r = AccountDetails(accountID=self.account_id)
+        response = self.client.request(r)
+        balance = float(response['account']['balance'])
+        if balance < self.config['absolute_threshold'] or balance < self.config['initial_balance'] * self.config['relative_threshold']:
+            self.close_all_positions()
+            channel = self.bot.get_channel(self.config['discord_alerts_channel'])
+            asyncio.run(channel.send(f"Low Balance: {balance:.2f} JPY, Trading Halted"))
+            with open(f"risk_log_{datetime.now().strftime('%Y%m%d')}.csv", 'a') as f:
+                f.write(f"{datetime.now()},balance_low,{balance},halt\n")
+    ```
+- **ログ**：risk_log_YYYYMMDD.csv（timestamp, balance, action）。
+
+### 9.4 エラーハンドリング
+- **通信エラー**：
+  - HTTP 429（レート制限）：リトライ3回（0.1秒間隔）。
+  - ストリーミング切断：Ping-Ack 300ms未応答で再接続。
+  - 例：
+    ```python
+    async def retry_request(self, endpoint, max_retries=3, delay=0.1):
+        for attempt in range(max_retries):
+            try:
+                response = await self.client.request(endpoint)
+                return response
+            except HTTP429Error:
+                await asyncio.sleep(delay)
+        logging.error(f"Failed after {max_retries} retries: {endpoint}")
+        return None
+    ```
+- **注文エラー**：
+  - 重複防止：Client Extensionsのidで追跡（uuid4）。
+  - スプレッド超過：triggerCondition=MIDで再試行。
+  - Transactions Streamで約定拒否を<1ms検知（PF+0.05）。
+- **実装**：
+  - trade.pyでエラー処理。
+  - monitor.pyでTransactions Stream監視。
+  - 例：
+    ```python
+    async def monitor_transactions(self):
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                f"https://api-fxpractice.oanda.com/v3/transactions/stream",
+                headers={"Authorization": f"Bearer {self.config['oanda_api_token']}"}
+            ) as resp:
+                async for line in resp.content:
+                    event = json.loads(line.decode('utf-8'))
+                    if event['type'] == 'ORDER_FILL' and event['reason'] == 'REJECTED':
+                        channel = self.bot.get_channel(self.config['discord_alerts_channel'])
+                        await channel.send(f"Order Rejected: {event['instrument']}, Reason={event['rejectReason']}")
+    ```
+- **ログ**：oanda_stream_log.csv（timestamp, endpoint, status, latency_ms）。
+
+### 9.5 追加リスク管理
+- **Transactions Stream**：
+  - 約定イベント、SLヒット、注文拒否を<1msで検知（/transactions/stream）。
+  - 通知：#alertsに送信（例：「USDJPY Order Rejected: Insufficient Margin」）。
+  - 効果：スリッページ低減（PF+0.05）。
+- **Pricing Stream**：
+  - spread列で250ms監視、Z-score>2でロット50%カット。
+  - 通知：#alertsに送信（例：「USDJPY Spread: 5.2pips, Lot Reduced 50%」）。
+- **Account Exposure**：
+  - exposure_ratio = abs(net_position_value)/balance、>0.4でlot_adj=0.5（DD-3%）。
+  - 通知：#alertsに送信（例：「Exposure Warning: Ratio=0.45」）。
+- **実装**：
+  - risk.pyでAccount Exposure計算。
+  - monitor.pyでStream監視。
+- **ログ**：risk_log_YYYYMMDD.csv（timestamp, exposure_ratio, action）。
+
+### 9.6 実装例（risk.py）
+```python
+import oandapyV20
+from oandapyV20.endpoints.accounts import AccountDetails
+import logging
+from datetime import datetime
+
+class RiskManager:
+    def __init__(self, config, discord_bot):
+        self.client = oandapyV20.API(access_token=config['oanda_api_token'], environment="practice")
+        self.account_id = config['account_id']
+        self.config = config
+        self.bot = discord_bot
+
+    def calculate_position_size(self, balance, sl_pips, pair, exposure_ratio):
+        pip_value = self.config['pip_value'][pair]
+        risk = balance * self.config['risk_per_trade']
+        units = risk / (sl_pips * pip_value)
+        lot_adj = 0.5 if exposure_ratio > 0.4 else 1.0
+        if lot_adj < 1.0:
+            channel = self.bot.get_channel(self.config['discord_alerts_channel'])
+            asyncio.run(channel.send(f"Exposure Warning: {pair}, Ratio={exposure_ratio:.2f}, Lot Reduced {lot_adj*100}%"))
+        return int(units * lot_adj)
+
+    async def monitor_exposure(self):
+        r = AccountDetails(accountID=self.account_id)
+        response = self.client.request(r)
+        balance = float(response['account']['balance'])
+        net_position_value = sum(float(pos['unrealizedPL']) for pos in response['account']['positions'])
+        exposure_ratio = abs(net_position_value) / balance
+        if exposure_ratio > 0.4:
+            channel = self.bot.get_channel(self.config['discord_alerts_channel'])
+            await channel.send(f"High Exposure: Ratio={exposure_ratio:.2f}, Reducing Lot Size")
+            with open(f"risk_log_{datetime.now().strftime('%Y%m%d')}.csv", 'a') as f:
+                f.write(f"{datetime.now()},exposure_high,{exposure_ratio:.2f},lot_reduced\n")
+        return exposure_ratio
+```
+
+## 10. AI/Optuna連携
+本セクションでは、AI/Optunaによる戦略最適化の仕様を定義します。Pythonが市場環境（ADX、ATR、H1 EMA）、バックテスト結果、Position Bookデータを活用し、日次でパラメータ提案を生成・適用します。LightGBM（推論20µs）、LangChain RAG、ウォークフォワード分析で過学習を防止し、シャープレシオ+0.05、プロフィットファクター1.65-1.70を目標とします。提案はDiscord（#strategy）で通知、!approve/!rejectで制御します。
+
+### 10.1 データソース
+- **市場環境**：
+  - ADX（14）、ATR（14）、H1 EMA（5, 20）（data.py）。
+  - Position Book（/v3/instruments/{inst}/positionBook、5分間隔）。
+  - ストレージ：DuckDB（/data/ticks_{pair}.parquet）。
+- **バックテスト**：
+  - 過去6か月の15分足（backtest_YYYYMMDD.csv）。
+  - 指標：勝率、シャープレシオ、プロフィットファクター。
+- **ニュース・指標**：
+  - `investpy`：高インパクト指標。
+  - `newsapi-python`：スプレッド急騰イベント。
+  - キャッシュ：Redis（news_indicators）。
+
+### 10.2 最適化対象
+- **パラメータ**：
+  - RSI閾値：rsi_long, rsi_short, rsi_long_squeeze, rsi_short_squeeze（例：50-60）。
+  - Position Book閾値：orderbook_half_threshold, orderbook_full_threshold（例：0.55-0.75）。
+  - BBandsスクイーズ閾値：squeeze_threshold_m15（例：75-95%）。
+  - TP/SLマルチプライヤー：tp_mult, sl_mult（例：1.5-2.5）。
+  - スコアリング重み：w1, w2, w3, w4（例：0.3, 0.3, 0.3, 0.1）。
+- **範囲**：
+  - 例：`rsi_long: [50, 60]`, `orderbook_full_threshold: [0.65, 0.75]`.
+  - 設定：config.json（optuna_ranges）。
+
+### 10.3 最適化プロセス
+- **Optuna**：
+  - 目的関数：シャープレシオ最大化（目標：>1.0）。
+  - 試行回数：100回/日（optuna_trials）。
+  - 期間：過去4週間（インサンプル）、1週間（アウトサンプル）。
+  - 例：
+    ```python
+    def objective(trial):
+        rsi_long = trial.suggest_float('rsi_long', 50, 60)
+        config = self.config.copy()
+        config['rsi_long'][pair] = rsi_long
+        stats = self.backtester.run_backtest(pair, config=config)
+        return stats['sharpe_ratio']
+    ```
+- **LightGBM**：
+  - モデル：20本短木（max_depth=5, n_estimators=20）。
+  - 特徴量：スコア、ATR、ADX、RSI、スプレッド、Position Book（delta）。
+  - 推論：20µs（numba加速）。
+- **LangChain RAG**：
+  - データ：バックテスト結果、Position Book、ニュース要約。
+  - プロンプト：`過去4週間のUSD_JPY勝率とPosition Book傾向を要約し、RSI閾値を提案`.
+  - 出力：JSON（`{'pair': 'USD_JPY', 'rsi_long': 58, 'sharpe_ratio': 1.2}`）。
+- **過学習防止**：
+  - ウォークフォワード分析（3か月インサンプル、1か月アウトサンプル）。
+  - 適用条件：シャープレシオ+0.05。
+- **実装**：
+  - ai_interface.pyで最適化実行。
+  - Discord #strategyに通知（例：「Proposal ID:001, rsi_long=58, Sharpe=+0.05」）。
+
+### 10.4 提案適用
+- **自動適用**：
+  - シャープレシオ+0.05以上でconfig.json更新。
+  - 例：`config['rsi_long']['USD_JPY'] = 58`.
+- **手動確認**：
+  - Webインターフェイスで提案表示（ai_proposals.csv）。
+  - Discord：!approve <proposal_id>, !reject <proposal_id>.
+  - 例：`!approve 001` → `rsi_long=58 applied`.
+- **通知**：
+  - 適用/却下を#strategyに送信（例：「Proposal 001 Approved: rsi_long=58」）。
+- **ログ**：
+  - ai_proposals.csv（proposal_id, pair, parameters, sharpe_ratio, status）。
+
+### 10.5 実装例（ai_interface.py）
+```python
+import optuna
+from langchain import LLMChain, PromptTemplate
+import polars as pl
+from datetime import datetime
+
+class AIOptimizer:
+    def __init__(self, config, backtester, discord_bot):
+        self.config = config
+        self.backtester = backtester
+        self.bot = discord_bot
+
+    def optimize_parameters(self, pair):
+        def objective(trial):
+            rsi_long = trial.suggest_float('rsi_long', 50, 60)
+            orderbook_threshold = trial.suggest_float('orderbook_full_threshold', 0.65, 0.75)
+            config = self.config.copy()
+            config['rsi_long'][pair] = rsi_long
+            config['orderbook_full_threshold'][pair] = orderbook_threshold
+            stats = self.backtester.run_backtest(pair, config=config)
+            return stats['sharpe_ratio']
+        
+        study = optuna.create_study(direction='maximize')
+        study.optimize(objective, n_trials=self.config['optuna_trials'])
+        best_params = study.best_params
+        proposal_id = str(uuid.uuid4())
+        with open(f"ai_proposals_{datetime.now().strftime('%Y%m%d')}.csv", 'a') as f:
+            f.write(f"{proposal_id},{pair},{best_params['rsi_long']},{best_params['orderbook_full_threshold']},{study.best_value},pending\n")
+        channel = self.bot.get_channel(self.config['discord_strategy_channel'])
+        asyncio.run(channel.send(f"Proposal {proposal_id}: {pair}, rsi_long={best_params['rsi_long']:.2f}, Sharpe={study.best_value:.2f}"))
+        return best_params
+```
+
+## 11. 非機能要件
+本セクションでは、非機能要件（パフォーマンス、信頼性、保守性、拡張性、セキュリティ）を定義します。レイテンシ<150ms、I/O削減70%、信頼性99.9%を目標とします。
+
+### 11.1 パフォーマンス
+- **データ処理**：
+  - インジケーター計算：<150ms（data.py、Numba JIT）。
+  - シグナル生成：<100ms（signal.module.py、LightGBM）。
+  - バックテスト：10分以内（optimize.py、DuckDB）。
+- **Webインターフェイス**：
+  - ページロード：2秒以内（streamlit、React）。
+  - ヒートマップ更新：1秒以内（plotly）。
+- **Discord通知**：
+  - リアルタイム：<1秒（bot.py、Webhook）。
+- **実装**：
+  - polarsで並列処理（I/O削減70%）。
+  - Redisキャッシュ（price_ticks、orderbook_{pair}）で<150ms。
+  - 実装：aiohttpでWebSocket（/pricing/stream）。
+  - aiohttpでWebSocket（/pricing/stream）。
+
+### 11.2 信頼性
+- **データ取得**：
+  - 稼働率99.9%（data.py、/v3/candles）。
+  - エラーハンドリング：HTTP 429リトライ3回。
+- **発注成功率**：
+  - 95%（trade.py、triggerCondition）。
+  - Transactions Streamで約定確認（<1ms）。
+- **Webサーバー**：
+  - 稼働率99.9%（BeeksFX VPS）。
+  - 冗長化：セッション保持（Redis）。
+- **ログ**：
+  - system_monitor_log.csv（timestamp, module, status, latency_ms）。
+
+### 11.3 保守性
+- **コード**：
+  - モジュール化：data.py, signal.module.py, trade.py, bot.py。
+  - テストカバレッジ：80%（pytest、test_*.py）。
+- **設定**：
+  - 外部化：config.json（jsonschemaバリデーション）。
+  - 更新：!approveで動的変更。
+- **ログ管理**：
+  - Discord #debugで集約（trade_log_YYYYMMDD.csv要約）。
+  - 10MB上限、30日保持（RotatingFileHandler）。
+- **CI/CD**：
+  - GitHub Actionsで自動テスト、コード品質監視。
+  - 例：.github/workflows/ci.yml（pytest, flake8）。
+- **ドキュメント**：
+  - user_guide.md, api_spec.md（Sphinx、HTML/PDF）。
+
+### 11.4 拡張性
+- **新通貨ペア**：
+  - 追加時間：1時間（config.pairs、data.py）。
+- **新インジケーター**：
+  - 追加時間：1日（data.py、signal.module.py）。
+  - 例：`new_indicator = calculate_stochastic(data)`.
+- **新AIプラットフォーム**：
+  - 追加時間：1週間（ai_interface.py、tensorflow）。
+- **クラウド移行**：
+  - AWS対応：1か月（ECS, S3, DynamoDB）。
+- **実装**：
+  - プラグイン設計：signal.module.pyに新戦略追加。
+
+### 11.5 セキュリティ
+- **認証**：
+  - JWT（flask-jwt-extended、30分有効）。
+  - 2段階認証（TOTP、pyotp）。
+- **アクセス制御**：
+  - IPホワイトリスト（config.allowed_ips）。
+  - セッションタイムアウト：30分。
+- **データ保護**：
+  - APIトークン暗号化（AES-256、cryptography）。
+  - HTTPS必須（flask_ssl）。
+- **ログ**：
+  - security_log.csv（timestamp, event, status）。
+
+### 11.6 実装例（config.py）
+```python
+import json
+import jsonschema
+from cryptography.fernet import Fernet
+import logging
+from datetime import datetime
+
+class ConfigManager:
+    def __init__(self, config_path='config.json'):
+        self.config_path = config_path
+        self.schema = {
+            "type": "object",
+            "properties": {
+                "rsi_long": {"type": "object"},
+                "orderbook_full_threshold": {"type": "object"},
+                "oanda_api_token": {"type": "string"}
+            }
+        }
+        self.cipher = Fernet(Fernet.generate_key())
+
+    def load_config(self):
+        with open(self.config_path, 'r') as f:
+            config = json.load(f)
+        jsonschema.validate(config, self.schema)
+        config['oanda_api_token'] = self.cipher.decrypt(config['oanda_api_token'].encode()).decode()
+        return config
+
+    async def update_config(self, key, value):
+        config = self.load_config()
+        config[key] = value
+        with open(self.config_path, 'w') as f:
+            json.dump(config, f)
+        logging.info(f"Config updated: {key}={value}")
+        channel = self.bot.get_channel(self.config['discord_config_channel'])
+        await channel.send(f"Config Updated: {key}={value}")
+        with open(f"config_log_{datetime.now().strftime('%Y%m%d')}.csv", 'a') as f:
+            f.write(f"{datetime.now()},{key},{value}\n")
+```
+
+## 12. 成果品
+本セクションでは、プロジェクトの成果品を定義します。
+
+### 12.1 ソースコード
+- **ファイル**：
+  - /src/data.py, /src/signal/, /src/trade.py, /src/risk.py, /src/monitor.py, /src/optimize.py, /src/ai_interface.py, /src/micro_alpha.py, /src/config.py, /src/dashboard.py, /src/dashboard_server.py, /src/bot.py, /src/webhook.py.
+  - /static/* (CSS, JS), /templates/* (HTML).
+- **リポジトリ**：
+  - GitHubプライベートリポジトリ（github.com/volexco/fx-ea-v3）。
+- **バックアップ**：
+  - Google Drive（/backup/YYYYMMDD/src/）。
+
+### 12.2 設定ファイル
+- **ファイル**：
+  - config.json：トレードパラメータ、APIトークン、Discordトークン。
+  - error_mapping.json：OANDA APIエラーコードとメッセージ。
+  - glossary.json：用語定義（例：rsi_long, ema_short）。
+- **フォーマット**：
+  - JSON、バリデーション（jsonschema）。
+- **バックアップ**：
+  - Google Drive（/backup/YYYYMMDD/config/）。
+
+### 12.3 ログファイル
+- **ファイル**：
+  - trade_log_YYYYMMDD.csv（timestamp, pair, trade_id, signal, score, profit）。
+  - orderbook_filter_log.csv（timestamp, pair, imbalance, score, lot_ratio）。
+  - notification_log_YYYYMMDD.csv（timestamp, channel, message, status）。
+  - spread_log.csv（timestamp, pair, spread, z_score, action）。
+  - risk_log_YYYYMMDD.csv（timestamp, exposure_ratio, balance, action）。
+  - ai_proposals.csv（proposal_id, pair, parameters, sharpe_ratio, status）。
+  - oanda_stream_log.csv（timestamp, endpoint, status, latency_ms）。
+  - config_log_YYYYMMDD.csv（timestamp, key, value）。
+- **管理**：
+  - 10MB上限、30日保持（RotatingFileHandler）。
+  - Discord #debugで要約（!summaryコマンド）。
+
+### 12.4 可視化ファイル
+- **ファイル**：
+  - equity_curve.png：エクイティカーブ（plotly）。
+  - hourly_pnl_heatmap.png：時間帯別損益。
+  - orderbook_heatmap.png：Position Book分布。
+  - score_heatmap.png：スコアリング分布。
+- **生成**：
+  - plotly, matplotlib（dashboard.py）。
+- **保存**：
+  - /visualizations/YYYYMMDD/.
+  - Google Drive（/backup/YYYYMMDD/visualizations/）。
+- **通知**：
+  - Discord #alertsに画像送信（例：「USDJPY Equity Curve Updated」）。
+
+### 12.5 ドキュメント
+- **ファイル**：
+  - user_guide.md：運用者マニュアル（インストール、Discordコマンド）。
+  - api_spec.md：API仕様（OANDA、Discord）。
+  - troubleshooting.md：エラー対応（例：HTTP 429）。
+- **生成**：
+  - SphinxでHTML/PDF出力（docs/build/）。
+- **保存**：
+  - /docs/.
+  - Google Drive（/backup/YYYYMMDD/docs/）。
+
+### 12.6 テスト結果
+- **ファイル**：
+  - performance_test.csv（module, execution_time_ms, status）。
+  - unit_test_report.html（pytest、カバレッジ80%）。
+- **テスト内容**：
+  - ユニットテスト：data.py, signal.module.py, trade.py, bot.py。
+  - パフォーマンステスト：データ処理<150ms（locust）。
+  - セキュリティテスト：OWASP ZAP。
+- **保存**：
+  - /tests/YYYYMMDD/.
+  - Google Drive（/backup/YYYYMMDD/tests/）。
+
+## 13. プロジェクト管理
+本セクションでは、プロジェクトの管理方法、スケジュール、リソース、品質管理、運用プロセスを定義します。収益性（PF1.65-1.70、勝率46-60%、DD<7-8%）、運用性（Discordで負荷10-20%削減）、信頼性（99.9%）を目標とします。
+
+### 13.1 プロジェクト目標
+- **収益性**：
+  - 勝率46-60%, シャープレシオ>1.0, プロフィットファクター1.65-1.70.
+  - 最大ドローダウン<7-8%, RR比>1.5.
+- **運用性**：
+  - Webインターフェイスでリアルタイム監視（ロード2秒以内）.
+  - Discordコマンドで設定変更（1分以内）.
+  - 運用負荷10-20%削減（#alerts, #strategy, #debug）.
+- **信頼性**：
+  - システム稼働率99.9%（BeeksFX VPS）.
+  - 発注成功率95%（trade.py）.
+- **保守性**：
+  - テストカバレッジ80%（pytest）.
+  - 新通貨ペア追加：1時間以内（config.pairs）.
+
+### 13.2 スケジュール
+- **フェーズ1（2025-06-05～2025-07-05）**：
+  - **タスク**：
+    - 要件定義：仕様書改訂（本ドキュメント）.
+    - プロトタイプ：data.py（Numba、H1合成）、signal.module.py（スコアリング、Position Book）、trade.py（Transactions Stream）、risk.py（Account Exposure）、bot.py（Discord Webhook、!summary）.
+  - **工数**：3.8人日（優先順位1：3.3、Discord：0.5）.
+  - **成果品**：/src/data.py, /src/signal/, /src/trade.py, /src/bot.py, user_guide.md.
+  - **リソース**：PM 1名、開発者2名.
+- **フェーズ2（2025-07-06～2025-09-05）**：
+  - **タスク**：
+    - 実装：monitor.py（スプレッド、ニュース）、optimize.py（DuckDBバックテスト）、ai_interface.py（LightGBM、Optuna）、dashboard.py（Streamlit）、bot.py（!approve/!reject/!pause/!resume、チャート）.
+    - ボラティリティ一本化：is_high_volatility()（data.py）.
+    - Pricing Streamのspread列活用（monitor.py）.
+  - **工数**：3.9人日（優先順位2：3.2、Discord：0.7）.
+  - **成果品**：/src/monitor.py, /src/optimize.py, /src/ai_interface.py, /src/dashboard.py, api_spec.md.
+  - **リソース**：PM 1名、開発者2名、アナリスト1名.
+- **フェーズ3（2025-09-06～2025-11-05）**：
+  - **タスク**：
+    - Webインターフェイス完成：dashboard_server.py（WebSocket）.
+    - テスト：ユニット（pytest）、パフォーマンス（locust）.
+    - ドキュメント：troubleshooting.md.
+  - **工数**：3.5人日.
+  - **成果品**：/src/dashboard_server.py, /tests/*, /docs/*.
+  - **リソース**：PM 1名、開発者2名、テスター1名.
+- **フェーズ4（2025-11-06～）**：
+  - **タスク**：
+    - デプロイ：BeeksFX VPS.
+    - 運用開始：リアルトレード、Discord監視（#alerts, #debug）.
+  - **工数**：2人日/月.
+  - **リソース**：PM 1名、運用者1名.
+
+### 13.3 リソース
+- **チーム**：
+  - プロジェクトマネージャー：1名（スケジュール、進捗管理）.
+  - 開発者：2名（Python、Web、Discord）.
+  - データアナリスト：1名（バックテスト、AI最適化）.
+  - テスター：1名（ユニット、パフォーマンス）.
+- **インフラ**：
+  - BeeksFX VPS：4コア、8GB RAM、256GB SSD、100Mbps、遅延<50ms.
+  - Redis：キャッシュ（4GB）.
+  - DuckDB：インメモリDB.
+- **ツール**：
+  - 開発：VSCode, Jupyter Notebook.
+  - バージョン管理：GitHub（プライベート）.
+  - ドキュメント：Sphinx.
+  - テスト：pytest, locust.
+  - コミュニケーション：Discord（#strategy, #alerts, #debug）.
+
+### 13.4 品質管理
+- **テスト**：
+  - ユニットテスト：pytest、カバレッジ80%（test_data.py, test_signal.py）.
+  - パフォーマンステスト：locust、<150ms.
+  - セキュリティテスト：OWASP ZAP.
+- **コードレビュー**：
+  - Pull Requestごと、2名で実施（GitHub）.
+  - チェックリスト：PEP8, docstring, エラーハンドリング.
+- **監視**：
+  - monitor.pyでCPU/メモリ/API通信を監視.
+  - Discord #debugで要約（例：「CPU=25%, API Latency=50ms」）.
+  - ログ：system_monitor_log.csv（timestamp, metric, value）.
+- **バックアップ**：
+  - Google Drive（/backup/YYYYMMDD/）.
+  - 頻度：日次（cron）.
+
+### 13.5 運用プロセス
+- **チームコミュニケーション**：
+  - Discordサーバー：
+    - #strategy：ロジック/AI提案議論、!approve/!reject履歴.
+    - #alerts：エントリー/エグジット/AIアドバイス/チャート/スプレッド警告.
+    - #debug：ログ集約（!summary, !log）.
+  - ボイスチャット：緊急対応（市場急変時のロジック調整）.
+- **自動化**：
+  - bot.py：!approve/!reject（AI提案）、!pause/!resume（トレード制御）、!summary（成績要約）.
+  - webhook.py：OANDA APIイベントを#alertsに<1秒送信.
+  - Zapier：balance変化を#alertsに通知（100タスク/月）.
+- **モニタリング**：
+  - リアルタイム：monitor.pyで/pricing/stream、/transactions/stream監視、#alerts送信.
+  - ログ：#debugで要約、Google Driveで詳細共有.
+- **ログ**：
+  - operational_log.csv（timestamp, action, status）.
+
+### 13.6 関係用語集
+- **rsi_long**：「RSI買い」説明: RSI（相対力指数）がこの値を上回ると、買いシグナルの条件の一部を満たす。トレンドフォロー戦略では、例えば55以上で強気相場を示し、スクイーズ戦略では40以上（緩和設定）に設定される場合がある。市場の勢いを判断する基準。
+- **ema_short**：「短期EMA」説明: 短期の指数移動平均（EMA）の計算期間（例：5期間）。短期EMAが中期EMAを上抜けるとゴールデンクロス（買いシグナル）、下抜けるとデッドクロス（売りシグナル）となる。短期的な価格トレンドを捉える。
+- **ema_mid**：「中期EMA」説明: 中期の指数移動平均（EMA）の計算期間（例：20期間）。短期EMAとのクロスでトレンド方向を判定。トレンドフォロー戦略の中核で、市場の中期的な動きを反映。
+- **tp_mult**：「利食い値幅の倍率」説明: 利食い（TP）の設定に使用されるATR（平均真の値幅）の倍率（例：1.2倍）。例えば、ATRが10pipsの場合、TPは12pipsに設定される。利益確定の目標を動的に設定。
+- **sl_mult**：「損切り値幅の倍率」説明: 損切り（SL）の設定に使用されるATRの倍率（例：2.0倍）。例えば、ATRが10pipsの場合、SLは20pipsに設定される。損失を制限するための動的閾値。
+- **rsi_period**：「RSI計算期間」説明: 相対力指数（RSI）を計算する期間（例：7期間）。短い期間は市場の短期的な勢い変化を敏感に捉え、長い期間は安定した勢いを評価。トレンドやスクイーズ戦略のモメンタム確認に使用。
+- **atr_period**：「ATR計算期間」説明: ATR（平均真の値幅）を計算する期間（例：14期間）。市場のボラティリティを測定し、TP/SLやトレーリングストップの幅、スクイーズ戦略のブレイクアウト判定（例：ATR>8pips）に使用。
+- **sharp_ratio**：「効率係数」説明: トレード戦略のリターン（収益率）をリスク（リターンの変動性）で割った指標で、リスク調整後の収益性を評価します。バックテストおよびAI解析で、戦略の効率性を測定する主要な指標として使用されます。値が高いほど効率的な戦略。
+- **max_drawdown**：「最大下落率」説明: ポートフォリオの価値がピークから最大でどれだけ下落したかをパーセンテージで示す指標。リスク管理の観点から、戦略の最大損失リスクを評価します。低いほど安定。
+- **Final_value**：「最終資産価値」説明: バックテストまたは実際取引の終了時点での口座残高（資産価値）。初期資金に対する運用成果を評価し、収益性を示します。
+- **live_count**：「実質取引件数」説明: 実際取引で実行された取引の総数。バックテストではなく、実際の市場での取引頻度を示し、その頻度を評価します。
+- **live_mean_pnl**：「実質取引平均損益」説明: 実際取引1件あたりの平均損益（利益または損失）。取引ごとの収益性を評価します。
+- **live_win_rate**：「実質取引勝率」説明: 実際取引で利益を上げた取引の割合。戦略の成功率を評価します。
+- **allowed_hours**：「取引許可時間帯」説明: システムで取引が許可される時間帯（例：東京市場、ロンドン市場）。市場の流動性やボラティリティを考慮し、エントリーを制限します。
+- **PF（プロフィットファクター）**：＝総利益÷総損失
+- **bb_period**：バンド計算期間
+- **squeeze_window**：スクイーズ状態の過去本数
+- **squeeze_width_percentile**：直近squeeze_window本中の何％（ex.10%）幅で判定
+- **break_type**：どちらのブレイクを許容するか
+- **min_bars_between_entries**：再エントリーまでの猶予
+- **orderbook_imbalance**：需給乖離率。OrderBookのロング/ショート注文量の比率（例：`imbalance = long_volume / (long_volume + short_volume)`）。
+- **clientExtensions**：OANDA APIのメタデータ（`id`, `tag`）で取引追跡。
+- **triggerCondition**：スプレッド感知注文の条件（BID/ASK/MID）。
+- **squeeze**：ボリンジャーバンドのバンド幅が狭まる状態。
+- **fake_breakout**：偽のブレイクアウト。
+
+#### 13.7 参考文献
+- OANDA API概要：https://www.oanda.jp/lab-education/api/
+- API開発ガイド：https://developer.oanda.com/docs/jp/v1/guide/
+- v20デベロッパーポータル：https://developer.oanda.com/rest-live-v20/introduction/
+- OANDA OrderBook：https://developer.oanda.com/rest-live-v20/instrument-ep/
+- OrderBook活用：https://www.reddit.com/r/algotrading/comments/15y9cv4/
+- OANDA Streaming API：https://developer.oanda.com/rest-live-v20/streaming/
+- Polarsドキュメント：https://pola.rs/
+- Polars採用事例：https://www.reddit.com/r/Python/comments/1jqntn9/
+- VectorBTドキュメント：https://vectorbt.dev/
+- LangChainドキュメント：https://langchain.readthedocs.io/
+- LangChain RAG：https://www.reddit.com/r/algotrading/comments/1kgqcs7/
+
+## 14. 課題と解決策
+本セクションでは、プロジェクトの課題と解決策を定義します。
+
+### 14.1 課題：OANDA APIレート制限
+- **問題**：
+  - /v3/candles, /v3/instruments/{inst}/positionBookは毎秒15リクエスト制限.
+  - 4通貨ペアのリアルタイム処理で超過リスク.
+- **解決策**：
+  - Redisキャッシュ（price_ticks, orderbook_{pair}, TTL=300s）.
+  - aiohttpで非同期リクエスト（<150ms）.
+  - ログ：oanda_stream_log.csvで超過監視（timestamp, endpoint, status）.
+- **実装**：
+  - data.pyでキャッシュ管理.
+  - monitor.pyでレート監視.
+
+### 14.2 課題：スプレッド急騰
+- **問題**：
+  - 突発ニュースでスプレッド3倍超（例：USD/JPY=5pips）.
+  - 誤発注リスク増加.
+- **解決策**：
+  - スプレッド感知注文（triggerCondition=MID）.
+  - 30分取引停止（monitor.py）.
+  - Discord #alerts通知（例：「USDJPY Spread Spike: 5.2pips」）.
+- **実装**：
+  - monitor.pyで/pricing/stream監視.
+  - bot.pyで通知.
+
+### 14.3 課題：過学習
+- **問題**：
+  - AI/Optuna提案が過去データに過剰適合.
+  - アウトサンプルで性能低下.
+- **解決策**：
+  - ウォークフォワード分析（3か月インサンプル、1か月アウトサンプル）.
+  - 適用条件：シャープレシオ+0.05.
+  - Discord #strategyで検証（!approve/!reject）.
+- **実装**：
+  - ai_interface.pyで分析.
+  - optimize.pyで検証.
+
+### 14.4 課題：リアルタイム処理遅延
+- **問題**：
+  - インジケーター計算（150ms以内）が遅延.
+  - Webインターフェイス更新（2秒以内）に影響.
+- **解決策**：
+  - polarsで並列処理（I/O削減70%）.
+  - Numbaで計算高速化（CPU負荷25%削減）.
+  - Redisでデータキャッシュ.
+  - WebSocket（flask-socketio）で5秒更新.
+- **実装**：
+  - data.pyで計算.
+  - dashboard_server.pyでWebSocket.
+
+### 14.5 課題：セキュリティ
+- **問題**：
+  - APIトークン漏洩リスク.
+  - 不正アクセスリスク.
+- **解決策**：
+  - トークン暗号化（AES-256、cryptography）.
+  - JWT、2段階認証（flask-jwt-extended, pyotp）.
+  - IPホワイトリスト（config.allowed_ips）.
+  - Discord #alertsで不正検知通知.
+- **実装**：
+  - config.pyで暗号化.
+  - dashboard_server.pyで認証.
+
+## 15. 将来展望
+本セクションでは、システムの将来展望と拡張計画を定義します。優先順位3の項目（Cython、GPUバックテスト等）を記載します。
+
+### 15.1 クラウド移行
+- **目標**：
+  - AWS（EC2, Lambda）で高可用性、稼働率99.99%、レイテンシ1ms以下.
+- **計画**：
+  - 2026年Q1：プロトタイプ（ECS/Fargate）.
+  - 2026年Q2：S3でデータ保存、DynamoDBでキャッシュ.
+- **工数**：10人日.
+- **実装**：
+  - cloud_config.pyでAWS SDK統合.
+
+### 15.2 新通貨ペア
+- **目標**：
+  - EUR/USD, GBP/USD追加、1時間以内.
+- **計画**：
+  - config.pairsに追記.
+  - data.py, signal.module.pyで対応.
+  - optimize.pyでバックテスト.
+- **工数**：1人日.
+
+### 15.3 新戦略
+- **目標**：
+  - スキャルピング戦略（M1足、勝率50%、シグナル20/日）.
+- **計画**：
+  - 2026年Q2：signal.module.pyにScalpingSignalGenerator.
+  - インジケーター：Stochastic, VWAP.
+- **工数**：5人日.
+
+### 15.4 AI強化
+- **目標**：
+  - 深層学習（LSTM）でシグナル予測、勝率+5%, PF+0.2.
+- **計画**：
+  - 2026年Q3：ai_interface.pyにtensorflow統合.
+  - クラウドGPUで学習.
+- **工数**：15人日.
+
+### 15.5 モバイルアプリ
+- **目標**：
+  - iOS/Androidでポジション監視、通知、ロード3秒以内.
+- **計画**：
+  - 2026年Q4：React Nativeで開発.
+  - WebSocketでリアルタイム更新.
+- **工数**：20人日.
+
+### 15.6 優先順位3項目
+- **Cython**：
+  - 目的：ティックATR/BB/RSI差分更新でバックテスト10-20倍高速化.
+  - 実装：data.pyをCython化.
+  - 工数：1.5人日.
+- **GPUバックテスト（CuPy）**：
+  - 目的：20分→90秒.
+  - 実装：optimize.pyにCuPy統合.
+  - 工数：2人日.
+- **PyPyサブプロセス化**：
+  - 目的：Position Book集計3-5倍高速化.
+  - 実装：micro_alpha.pyでPyPy.
+  - 工数：1人日.
+- **非通貨ペア**：
+  - 対象：XAU_USD, US30_USD（シャープ+0.1）.
+  - 実装：config.pairs, data.py.
+  - 工数：1.2人日.
+- **OrderBook Depth by Bucket**：
+  - 目的：VWAPでRR+0.05.
+  - 実装：micro_alpha.py、PyPy.
+  - 工数：0.8人日.
+- **ヒストリカルTick (5s)**：
+  - 目的：MLフィーチャで勝率+1%.
+  - 実装：data.py、DuckDB.
+  - 工数：1人日.
+- **フォワード・スワップレート**：
+  - 目的：トレンド方向フィルタ.
+  - 実装：data.py.
+  - 工数：0.5人日.
+- **MACD勾配置換 & BB幅平滑化**：
+  - 目的：計算量50%削減.
+  - 実装：data.py.
+  - 工数：0.6人日.
+- **包み足・+DI/-DI差フィルター削除**：
+  - 目的：勝率寄与小、簡素化.
+  - 実装：signal.module.py.
+  - 工数：0.2人日.
+- **パフォーマンスCI（GitHub Actions）**：
+  - 目的：品質維持（pytest, flake8）.
+  - 実装：.github/workflows/ci.yml.
+  - 工数：0.5人日.
+
+### 15.7 実装例（cloud_config.py）
+```python
+import boto3
+from datetime import datetime
+
+class CloudConfig:
+    def __init__(self):
+        self.s3_client = boto3.client('s3')
+        self.dynamodb = boto3.resource('dynamodb')
+
+    def save_data(self, bucket, key, data):
+        self.s3_client.put_object(Bucket=bucket, Key=key, Body=data)
+        with open(f"cloud_log_{datetime.now().strftime('%Y%m%d')}.csv", 'a') as f:
+            f.write(f"{datetime.now()},{bucket},{key},success\n")
+
+    def cache_data(self, table, key, value):
+        table = self.dynamodb.Table(table)
+        table.put_item(Item={'key': key, 'value': value, 'timestamp': str(datetime.now())})
+```
+
+## 15. 将来展望
+
+〇【profitability_optimized_forecast.py】pkg_resourcesの2025年末削除問題
+サードパーティ依存（investpy等）するpkg_resourcesは2025年末でPython公式から削除予定。これに依存する外部ライブラリ（例：investpy等）は、今後対応されなければ将来インポートエラー等で一部機能が使えなくなる恐れがある。自作部分はimportlib系へ移行し、半年ごとに依存パッケージのアップデートや代替APIの検討を必ず行うこと。

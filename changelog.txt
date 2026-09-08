@@ -1,0 +1,25 @@
+2026-06-02 14:34
+- [フェーズ3：コンソール可視化とリアルタイム稼働ループの統合] を実装。
+  - virtual_main_loop.py を新規作成。OANDAのリアルタイム価格ストリームを用いた仮想フォワードテストモードを構築。
+  - core/signal_module.py: AIスコア算出にマクロ金利差（日米）とLLMセンチメントスコアを統合。
+  - core/indicators.py: add_all_indicators() 内で add_macro_features() を自動実行するように拡張。
+  - dashboard.py / dashboard_data.py / dashboard_ui.py: 「仮想検証」タブを追加。仮想口座のエクイティカーブ、勝率、残高、取引履歴のリアルタイム表示に対応。
+- test_phase3.py を作成し、リアルタイム価格受信から仮想約定、ダッシュボード用ログ出力までの一連のフローを検証。
+
+2026-06-02 14:16
+- [フェーズ2：システム内仮想取引・約定シミュレーターの構築] を実装。
+  - core/risk.py: calculate_virtual_lot() を追加。AIスコア（A:100%, B:50%, C:0%）に基づく動的ロット計算を実装。
+  - core/virtual_trade.py: VirtualBrokerクラスを新規作成。仮想残高管理、ポジションオープン（スプレッド考慮）、自動決済（TP/SL監視）、ログ出力機能を搭載。
+- test_phase2.py を作成し、仮想取引の一連のサイクル（計算→オープン→決済→ログ保存）が正常に動作することを確認。
+
+2026-06-02 14:06
+- [フェーズ1：マクロ特徴量・LLM解析基盤の整備] を実装。
+  - core/oanda_api.py: check_oanda_connection() を実装し、起動時の接続確認に対応。
+  - core/data.py: add_macro_features() を実装し、yfinance経由で日米金利差を価格データにマージする機能を追加。
+  - core/monitor.py: analyze_sentiment_llm() を実装し、Google Geminiによるニュースのセンチメント解析に対応。
+- test_phase1.py を作成し、上記機能の正常動作を確認（OANDA接続成功、マクロデータマージ成功を確認。LLMはAPIキーの有効期限切れを確認）。
+- 依存ライブラリ（yfinance, google-generativeai, pyarrow, concurrent-log-handler, loguru）をインストール。
+
+2025年9月3日 15時30分: blueprint.txtのセクション1とセクション2を最適化しました。
+2025年9月3日 15時45分: core/backtest/backtester.pyにvbt.Portfolio.from_signalsのデバッグコードを追加。
+2025年9月5日 18:30分: OANDA APIの認証エラーを修正。`config.json` に `environment` を追加し、API接続が動的に行われるように `core/trade.py` と `core/oanda_api.py` を修正。

@@ -1,0 +1,685 @@
+{
+    "oanda": {
+        "current_profile": "USA_REAL",
+        "profiles": {
+            "USA_REAL": {
+                "account_id": "YOUR_USA_REAL_ACCOUNT_ID",
+                "access_token": "YOUR_USA_REAL_ACCESS_TOKEN",
+                "api_url": "https://api-fxtrade.oanda.com",
+                "stream_url": "https://stream-fxtrade.oanda.com",
+                "has_orderbook": false,
+                "has_positionbook": false,
+                "has_gslo": false,
+                "environment": "live"
+            },
+            "USA_DEMO": {
+                "account_id": "YOUR_USA_DEMO_ACCOUNT_ID",
+                "access_token": "YOUR_USA_DEMO_ACCESS_TOKEN",
+                "api_url": "https://api-fxpractice.oanda.com",
+                "stream_url": "https://stream-fxpractice.oanda.com",
+                "has_orderbook": false,
+                "has_positionbook": false,
+                "has_gslo": false,
+                "environment": "practice"
+            },
+            "JPN_REAL": {
+                "account_id": "YOUR_JPN_REAL_ACCOUNT_ID",
+                "access_token": "YOUR_JPN_REAL_ACCESS_TOKEN",
+                "api_url": "https://api-fxtrade.oanda.com",
+                "stream_url": "https://stream-fxtrade.oanda.com",
+                "has_orderbook": true,
+                "has_positionbook": true,
+                "has_gslo": true,
+                "environment": "live"
+            },
+            "JPN_DEMO": {
+                "account_id": "YOUR_JPN_DEMO_ACCOUNT_ID",
+                "access_token": "YOUR_JPN_DEMO_ACCESS_TOKEN",
+                "api_url": "https://api-fxpractice.oanda.com",
+                "stream_url": "https://stream-fxpractice.oanda.com",
+                "has_orderbook": false,
+                "has_positionbook": false,
+                "has_gslo": false,
+                "environment": "practice"
+            }
+        }
+    },
+    "system": {
+        "project_name": "ＦＸ自動取引システム",
+        "version": "1.0.0",
+        "data_dir": "data",
+        "summary_log_file": "logs/detailed_trades_all_pairs_trend.csv",
+        "timezone": "Asia/Tokyo",
+        "loop_interval_sec": 10,
+        "log_dir": "logs",
+        "use_price_simulation": false,
+        "backup_dir": "backup",
+        "redis_url": "redis://:YOUR_REDIS_PASSWORD@127.0.0.1:6379/1",
+        "dry_run": true,
+        "log_levels": {
+            "signal_module": "DEBUG"
+        },
+        "active_windows": {
+            "USD_JPY": [
+                {
+                    "start": "09:30",
+                    "end": "11:30"
+                },
+                {
+                    "start": "16:30",
+                    "end": "17:59"
+                },
+                {
+                    "start": "22:30",
+                    "end": "23:59"
+                }
+            ],
+            "EUR_JPY": [
+                {
+                    "start": "15:30",
+                    "end": "19:30"
+                }
+            ],
+            "GBP_JPY": [
+                {
+                    "start": "17:30",
+                    "end": "19:59"
+                },
+                {
+                    "start": "23:30",
+                    "end": "01:00"
+                }
+            ],
+            "AUD_JPY": [
+                {
+                    "start": "09:00",
+                    "end": "19:59"
+                },
+                {
+                    "start": "21:00",
+                    "end": "01:00"
+                }
+            ],
+            "EUR_USD": [
+                {
+                    "start": "11:00",
+                    "end": "23:59"
+                }
+            ],
+            "AUD_USD": [
+                {
+                    "start": "11:00",
+                    "end": "18:59"
+                },
+                {
+                    "start": "21:00",
+                    "end": "01:00"
+                }
+            ],
+            "GBP_USD": [
+                {
+                    "start": "13:00",
+                    "end": "18:59"
+                },
+                {
+                    "start": "21:00",
+                    "end": "01:00"
+                }
+            ]
+        },
+        "time_filters": {
+            "forbidden_start": "01:00",
+            "forbidden_end": "09:00",
+            "friday_stop_hour": 20,
+            "friday_full_stop_pairs": [
+                "EUR_USD",
+                "AUD_USD"
+            ],
+            "thursday_filters": {
+                "enabled": true,
+                "forbidden_hours": [
+                    1,
+                    2,
+                    3,
+                    8,
+                    9
+                ],
+                "forbidden_pairs": [
+                    "GBP_JPY"
+                ]
+            }
+        }
+    },
+    "trading": {
+        "enabled": true,
+        "enabled_strategies": {
+            "trend": true,
+            "bb_squeeze": false
+        },
+        "trade_enabled_pairs": {
+            "USD_JPY": true,
+            "EUR_JPY": true,
+            "GBP_JPY": true,
+            "AUD_JPY": true,
+            "AUD_USD": true,
+            "EUR_USD": true,
+            "GBP_USD": true
+        },
+        "symbols": [
+            "USD_JPY",
+            "EUR_JPY",
+            "GBP_JPY",
+            "AUD_JPY",
+            "AUD_USD",
+            "EUR_USD",
+            "GBP_USD"
+        ],
+        "pip_size": 0.01,
+        "cooldown_seconds": 3600,
+        "risk_per_trade": 0.01
+    },
+    "ai": {
+        "lot_ratio_tiers": {
+            "full": 0.7,
+            "half": 0.55
+        },
+        "score_threshold": 0.55,
+        "model_performance_threshold": 0.65
+    },
+    "backtest": {
+        "start_date": "2020-08-01T06:00:00Z",
+        "end_date": "2025-07-31T23:45:00Z",
+        "strategies_to_generate": [
+            "trend",
+            "bb_squeeze"
+        ]
+    },
+    "risk_management": {
+        "min_sl_pips": {
+            "USD_JPY": 12.0,
+            "EUR_JPY": 12.0,
+            "GBP_JPY": 18.0,
+            "AUD_JPY": 15.0,
+            "EUR_USD": 12.0,
+            "GBP_USD": 15.0,
+            "AUD_USD": 15.0
+        },
+        "base_sl_pips": 10.0,
+        "risk_per_trade": 0.01,
+        "max_drawdown_threshold": 0.08,
+        "max_total_positions": 7,
+        "margin_rates": {
+            "USD_JPY": 0.04,
+            "EUR_JPY": 0.04,
+            "GBP_JPY": 0.05,
+            "AUD_JPY": 0.04,
+            "AUD_USD": 0.04,
+            "EUR_USD": 0.04,
+            "GBP_USD": 0.05
+        },
+        "allocated_margin_per_pair": 250000,
+        "invest_ratio": 0.5,
+        "risk_tolerance_pct": 0.015,
+        "target_win_rate": 0.55,
+        "target_rr_ratio": 1.2,
+        "trades_per_day": 5,
+        "use_dynamic_atr": true,
+        "tp_trailing": {
+            "enabled": true,
+            "use_atr_trail": true,
+            "trail_distance_pips": 10.0,
+            "trail_step_pips": 5.0
+        },
+        "enable_doten": false,
+        "cooldown_minutes": 30,
+        "kill_switch_pips": 0.2,
+        "kill_switch_lockout_min": 60,
+        "max_positions_total": 4
+    },
+    "dynamic_allocation": {
+        "enabled": true,
+        "evaluation_metric": "PF",
+        "multiplier_min": 0.5,
+        "multiplier_max": 1.5,
+        "pair_multipliers": {
+            "USD_JPY": 1.5,
+            "GBP_USD": 1.25,
+            "EUR_USD": 1.0,
+            "GBP_JPY": 1.0,
+            "AUD_JPY": 1.0,
+            "AUD_USD": 0.75,
+            "EUR_JPY": 0.5
+        }
+    },
+    "anti_martingale": {
+        "enabled": true,
+        "total_max_exposure_pct": 0.05,
+        "drawdown_brakes": [
+            {
+                "dd_pct": 0.05,
+                "lot_multiplier": 0.75
+            },
+            {
+                "dd_pct": 0.1,
+                "lot_multiplier": 0.5
+            },
+            {
+                "dd_pct": 0.15,
+                "lot_multiplier": 0.0,
+                "kill_switch": true
+            }
+        ]
+    },
+    "risk_reward": {
+        "default": {
+            "rr_min": 1.5,
+            "rr_max": 2.5,
+            "adx_threshold_high": 30.0,
+            "rr_for_strong_trend": 2.0,
+            "rr_for_weak_trend": 1.5
+        },
+        "strategy_overrides": {
+            "trend": {
+                "rr_min": 1.5,
+                "rr_max": 3.0,
+                "adx_threshold_high": 28.0,
+                "rr_for_strong_trend": 2.2,
+                "rr_for_weak_trend": 1.6
+            },
+            "bb_squeeze": {
+                "rr_min": 1.4,
+                "rr_max": 2.2,
+                "adx_threshold_high": 32.0,
+                "rr_for_strong_trend": 1.8,
+                "rr_for_weak_trend": 1.4
+            }
+        }
+    },
+    "indicators": {
+        "ema_short": 9,
+        "ema_mid": 20,
+        "ema_h1_short": 5,
+        "ema_h1_mid": 20,
+        "rsi_period": 14,
+        "rsi_long": 55,
+        "rsi_short": 45,
+        "adx_period": 14,
+        "adx_th": 20,
+        "use_adx": true,
+        "use_di_plus_minus": true,
+        "di_diff_threshold": {
+            "USD_JPY": 10,
+            "EUR_JPY": 12,
+            "GBP_JPY": 10,
+            "AUD_JPY": 10
+        },
+        "atr_period": 20,
+        "atr_threshold": 8,
+        "sl_atr_multiplier": 2.0,
+        "tp_atr_multiplier": 1.5,
+        "bb_period": 20,
+        "bb_std": 2,
+        "bb_squeeze_pctl": 0.85,
+        "macd_fast": 12,
+        "macd_slow": 26,
+        "macd_signal_period": 9,
+        "confidence_threshold": 0.7,
+        "score_weights": {
+            "orderbook": 0.3,
+            "h1_ema": 0.4,
+            "ai": 0.3
+        },
+        "trend": {
+            "signal_mode": "state"
+        },
+        "squeeze": {
+            "use_macd_filter": false,
+            "use_rsi_filter": false,
+            "rsi_long_threshold": 40,
+            "rsi_short_threshold": 60
+        }
+    },
+    "notifications": {
+        "cooldown_seconds": 60,
+        "email": {
+            "enabled": true,
+            "accounts": [
+                {
+                    "enabled": true,
+                    "smtp": "smtp.gmail.com",
+                    "port": 587,
+                    "user": "kijimadayon@gmail.com",
+                    "pass": "vilc ciwq dysv uxhl",
+                    "from": "kijimadayon@gmail.com",
+                    "to": "kijimadayon@gmail.com"
+                }
+            ]
+        },
+        "discord": {
+            "enabled": true,
+            "webhook_url": "https://discordapp.com/api/webhooks/1380037392550858843/BfHw7iPwCkVkmOW-ehKDqv4ASycv1bGSqKKvzYbO56eLsoBgDe3gg05zqKiM5fD5QZ80",
+            "bot_token": "YOUR_DISCORD_BOT_TOKEN",
+            "channel_id": "1380037301522141299"
+        },
+        "slack": {
+            "enabled": false,
+            "webhook_url": ""
+        },
+        "line": {
+            "enabled": false,
+            "notify_token": "YOUR_LINE_NOTIFY_TOKEN"
+        }
+    },
+    "dashboard": {
+        "enabled": true,
+        "jwt_secret": "YOUR_JWT_SECRET",
+        "totp_secret": "YOUR_TZTP_SECRET",
+        "allowed_ips": [
+            "127.0.0.1"
+        ]
+    },
+    "tasks": {
+        "archiver": {
+            "enabled": true,
+            "cron_schedule": "00 04 * * *",
+            "schedule": "0 0 * * *"
+        },
+        "data_downloader": {
+            "enabled": true,
+            "cron_schedule": "00 02 * * *",
+            "pairs": [
+                "USD_JPY",
+                "EUR_JPY",
+                "GBP_JPY",
+                "AUD_JPY",
+                "AUD_USD",
+                "EUR_USD",
+                "GBP_USD"
+            ],
+            "schedule": "0 0 * * *"
+        },
+        "walk_forward_analyzer": {
+            "enabled": true,
+            "cron_schedule": "15 11 * * 6",
+            "pairs_to_analyze": [
+                "USD_JPY",
+                "EUR_JPY",
+                "GBP_JPY",
+                "AUD_JPY",
+                "AUD_USD",
+                "EUR_USD",
+                "GBP_USD"
+            ],
+            "strategies_to_analyze": [
+                "trend",
+                "bb_squeeze"
+            ],
+            "schedule": "45 11 * * 6"
+        },
+        "optimizer": {
+            "n_trials": 100,
+            "backtest_candle_count": 2880,
+            "parameter_space": {
+                "trend": {
+                    "ema_fast_span": {
+                        "type": "int",
+                        "low": 5,
+                        "high": 25
+                    },
+                    "ema_slow_span": {
+                        "type": "int",
+                        "low": 30,
+                        "high": 100
+                    },
+                    "adx_threshold": {
+                        "type": "int",
+                        "low": 15,
+                        "high": 35
+                    },
+                    "sl_atr_multiplier": {
+                        "type": "float",
+                        "low": 1.2,
+                        "high": 3.0
+                    },
+                    "tp_atr_multiplier": {
+                        "type": "float",
+                        "low": 1.5,
+                        "high": 4.0
+                    },
+                    "min_sl_pips": {
+                        "type": "float",
+                        "low": 10.0,
+                        "high": 25.0
+                    },
+                    "trade_friday": {
+                        "type": "categorical",
+                        "choices": [
+                            true,
+                            false
+                        ]
+                    }
+                },
+                "bb_squeeze": {
+                    "bb_period": {
+                        "type": "int",
+                        "low": 10,
+                        "high": 30
+                    },
+                    "bb_std": {
+                        "type": "float",
+                        "low": 1.5,
+                        "high": 3.0
+                    },
+                    "bb_squeeze_pctl": {
+                        "type": "float",
+                        "low": 0.7,
+                        "high": 0.9
+                    },
+                    "rsi_long_th": {
+                        "type": "int",
+                        "low": 50,
+                        "high": 65
+                    },
+                    "rsi_short_th": {
+                        "type": "int",
+                        "low": 35,
+                        "high": 50
+                    },
+                    "min_sl_pips": {
+                        "type": "float",
+                        "low": 10.0,
+                        "high": 25.0
+                    }
+                }
+            }
+        }
+    },
+    "api_keys": {
+        "chatgpt": {
+            "api_key": "YOUR_OPENAI_API_KEY",
+            "model": "gpt-4o"
+        },
+        "gemini": {
+            "api_key": "YOUR_GEMINI_API_KEY"
+        },
+        "newsapi": "YOUR_NEWSAPI_KEY"
+    },
+    "economic_events": {
+        "exclude_before_min": 30,
+        "exclude_after_min": 60,
+        "block_duration_min": {
+            "high": 60,
+            "medium": 30,
+            "low": 15
+        }
+    },
+    "per_symbol_overrides": {
+        "USD_JPY": {
+            "indicators": {
+                "momentum": {
+                    "ema_short": 10,
+                    "ema_mid": 22,
+                    "rsi_period": 12
+                },
+                "bb_squeeze": {
+                    "bb_period": 19,
+                    "bb_std": 2.2
+                }
+            },
+            "trade": {
+                "momentum": {
+                    "stop_loss_pips": 15,
+                    "take_profit_pips": 30
+                },
+                "bb_squeeze": {
+                    "stop_loss_pips": 20,
+                    "take_profit_pips": 40
+                }
+            }
+        },
+        "EUR_JPY": {
+            "indicators": {
+                "momentum": {
+                    "ema_short": 11
+                },
+                "trend": {
+                    "ema_fast_span": 8
+                }
+            },
+            "trade": {
+                "momentum": {
+                    "stop_loss_pips": 16,
+                    "take_profit_pips": 32
+                }
+            }
+        }
+    },
+    "best_params": {
+        "USD_JPY": {
+            "trend": {
+                "ema_fast_span": 12,
+                "ema_slow_span": 49
+            },
+            "bb_squeeze": {
+                "bb_period": 12,
+                "bb_std": 1.8221644223959745,
+                "bb_squeeze_pctl": 0.7850299570964211,
+                "rsi_long_th": 55,
+                "rsi_short_th": 45
+            }
+        },
+        "EUR_JPY": {
+            "trend": {
+                "ema_fast_span": 15,
+                "ema_slow_span": 54
+            },
+            "bb_squeeze": {
+                "bb_period": 27,
+                "bb_std": 2.996188382709525,
+                "bb_squeeze_pctl": 0.8408679333804219,
+                "rsi_long_th": 55,
+                "rsi_short_th": 45
+            }
+        },
+        "GBP_JPY": {
+            "trend": {
+                "ema_fast_span": 5,
+                "ema_slow_span": 75
+            },
+            "bb_squeeze": {
+                "bb_period": 24,
+                "bb_std": 1.7502116578913605,
+                "bb_squeeze_pctl": 0.8649874100103428,
+                "rsi_long_th": 60,
+                "rsi_short_th": 40
+            }
+        },
+        "AUD_JPY": {
+            "trend": {
+                "ema_fast_span": 6,
+                "ema_slow_span": 46
+            },
+            "bb_squeeze": {
+                "bb_period": 28,
+                "bb_std": 1.5300797377439626,
+                "bb_squeeze_pctl": 0.8214044625740607,
+                "rsi_long_th": 55,
+                "rsi_short_th": 45
+            }
+        }
+    },
+    "strategy_filters": {
+        "USD_JPY": {
+            "use_ema_order": true,
+            "use_close_ema50": true,
+            "use_ema_slope": false,
+            "use_adx": true,
+            "adx_threshold": 20
+        },
+        "GBP_JPY": {
+            "use_ema_order": true,
+            "use_close_ema50": false,
+            "use_ema_slope": true,
+            "use_adx": true,
+            "adx_threshold": 20
+        },
+        "EUR_JPY": {
+            "use_ema_order": true,
+            "use_close_ema50": true,
+            "use_ema_slope": true,
+            "use_adx": true,
+            "adx_threshold": 20
+        },
+        "AUD_JPY": {
+            "use_ema_order": true,
+            "use_close_ema50": false,
+            "use_ema_slope": false,
+            "use_adx": true,
+            "adx_threshold": 20
+        },
+        "AUD_USD": {
+            "use_ema_order": true,
+            "use_close_ema50": false,
+            "use_ema_slope": false,
+            "use_adx": true,
+            "adx_threshold": 20
+        },
+        "EUR_USD": {
+            "use_ema_order": true,
+            "use_close_ema50": false,
+            "use_ema_slope": false,
+            "use_adx": true,
+            "adx_threshold": 20
+        },
+        "GBP_USD": {
+            "use_ema_order": true,
+            "use_close_ema50": false,
+            "use_ema_slope": false,
+            "use_adx": true,
+            "adx_threshold": 20
+        }
+    },
+    "instruments": {
+        "USD_JPY": {
+            "pip_value": 0.01
+        },
+        "EUR_JPY": {
+            "pip_value": 0.01
+        },
+        "GBP_JPY": {
+            "pip_value": 0.01
+        },
+        "AUD_JPY": {
+            "pip_value": 0.01
+        },
+        "AUD_USD": {
+            "pip_value": 0.0001
+        },
+        "EUR_USD": {
+            "pip_value": 0.0001
+        },
+        "GBP_USD": {
+            "pip_value": 0.0001
+        }
+    }
+}
